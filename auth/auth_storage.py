@@ -1,0 +1,248 @@
+import configparser
+import os
+import platform
+import shutil
+from pathlib import Path
+
+
+APP_DIR_NAME = "lota-launcher"
+SETTINGS_FILE_NAME = "config.cfg"
+
+
+def _to_bool(value, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off", ""}:
+        return False
+    return default
+
+
+def _platform_app_dir(home: Path, system: str) -> Path:
+    if system == "Windows":
+        return Path(os.getenv("LOCALAPPDATA", home / "AppData" / "Local")) / APP_DIR_NAME
+    if system == "Darwin":
+        return home / "Library" / "Application Support" / APP_DIR_NAME
+    return Path(os.getenv("XDG_DATA_HOME", home / ".local" / "share")) / APP_DIR_NAME
+
+
+def _legacy_app_candidates(home: Path, system: str) -> list[Path]:
+    candidates = [
+        home / ".lota-launcher",
+        home / ".lotalauncher",
+    ]
+    if system == "Windows":
+        appdata = Path(os.getenv("APPDATA", home / "AppData" / "Roaming"))
+        localappdata = Path(os.getenv("LOCALAPPDATA", home / "AppData" / "Local"))
+        candidates.extend(
+            [
+                localappdata / "LotaLauncher",
+                localappdata / "lota_launcher",
+                localappdata / "lota-launcher",
+                appdata / "lota_launcher",
+                appdata / "lota-launcher",
+                appdata / "LotaLauncher",
+            ]
+        )
+    elif system == "Darwin":
+        candidates.extend(
+            [
+                home / "Library" / "Application Support" / "lota_launcher",
+                home / "Library" / "Application Support" / "LotaLauncher",
+            ]
+        )
+    else:
+        xdg_config_home = Path(os.getenv("XDG_CONFIG_HOME", home / ".config"))
+        xdg_data_home = Path(os.getenv("XDG_DATA_HOME", home / ".local" / "share"))
+        candidates.extend(
+            [
+                xdg_data_home / "lota_launcher",
+                xdg_data_home / "LotaLauncher",
+                xdg_config_home / "lota_launcher",
+                xdg_config_home / "lota-launcher",
+                xdg_config_home / "LotaLauncher",
+            ]
+        )
+    return candidates
+
+
+def _copy_missing_tree(source_dir: Path, target_dir: Path) -> None:
+    for root, dirs, files in os.walk(source_dir):
+        root_path = Path(root)
+        rel_root = root_path.relative_to(source_dir)
+        target_root = target_dir / rel_root
+        target_root.mkdir(parents=True, exist_ok=True)
+        for dirname in dirs:
+            (target_root / dirname).mkdir(parents=True, exist_ok=True)
+        for filename in files:
+            src = root_path / filename
+            dst = target_root / filename
+            if dst.exists():
+                continue
+            try:
+                shutil.copy2(src, dst)
+            except OSError:
+                continue
+
+
+def _migrate_dir(source_dir: Path, target_dir: Path) -> None:
+    if not source_dir.exists() or source_dir == target_dir:
+        return
+    if target_dir.exists():
+        try:
+            _copy_missing_tree(source_dir, target_dir)
+        except OSError:
+            return
+        return
+    try:
+        source_dir.rename(target_dir)
+    except OSError:
+        try:
+            shutil.copytree(source_dir, target_dir, dirs_exist_ok=True)
+        except OSError:
+            return
+
+
+def _ensure_dir(path: Path, fallback_candidates: list[Path]) -> Path:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    except OSError:
+        for candidate in fallback_candidates:
+            try:
+                candidate.mkdir(parents=True, exist_ok=True)
+                return candidate
+            except OSError:
+                continue
+    return path
+
+
+def get_config_dir() -> Path:
+    home = Path.home()
+    system = platform.system()
+    app_dir = _platform_app_dir(home, system)
+    legacy_dirs = _legacy_app_candidates(home, system)
+    for legacy_dir in legacy_dirs:
+        _migrate_dir(legacy_dir, app_dir)
+    return _ensure_dir(app_dir, [])
+
+
+def get_data_dir() -> Path:
+    return get_config_dir()
+
+
+def get_settings_cfg() -> Path:
+    return get_config_dir() / SETTINGS_FILE_NAME
+
+
+def get_skin_file() -> Path:
+    return get_data_dir() / "skin.png"
+
+
+def save_auth_data(token: str, username: str, status: str, sub_level: int):
+    cfg = get_settings_cfg()
+    parser = configparser.ConfigParser()
+    if cfg.exists():
+        parser.read(cfg, encoding="utf-8")
+    if not parser.has_section("auth"):
+        parser.add_section("auth")
+    parser.set("auth", "token", token)
+    parser.set("auth", "username", username)
+    parser.set("auth", "status", status)
+    parser.set("auth", "sub_level", str(sub_level))
+    with cfg.open("w", encoding="utf-8") as f:
+        parser.write(f)
+
+
+def save_register_data(link_token: str, telegram_url: str):
+    cfg = get_settings_cfg()
+    parser = configparser.ConfigParser()
+    if cfg.exists():
+        parser.read(cfg, encoding="utf-8")
+    if not parser.has_section("register"):
+        parser.add_section("register")
+    parser.set("register", "link_token", link_token)
+    parser.set("register", "telegram_url", telegram_url)
+    with cfg.open("w", encoding="utf-8") as f:
+        parser.write(f)
+
+
+def load_register_data():
+    cfg = get_settings_cfg()
+    if not cfg.exists():
+        return None
+    parser = configparser.ConfigParser()
+    parser.read(cfg, encoding="utf-8")
+    if not parser.has_section("register"):
+        return None
+    link_token = parser.get("register", "link_token", fallback="").strip()
+    telegram_url = parser.get("register", "telegram_url", fallback="").strip()
+    if not link_token or not telegram_url:
+        return None
+    return {
+        "link_token": link_token,
+        "telegram_url": telegram_url,
+    }
+
+
+def clear_register_data():
+    cfg = get_settings_cfg()
+    if not cfg.exists():
+        return
+    parser = configparser.ConfigParser()
+    parser.read(cfg, encoding="utf-8")
+    if parser.has_section("register"):
+        parser.remove_section("register")
+        with cfg.open("w", encoding="utf-8") as f:
+            parser.write(f)
+
+
+def load_auth_data():
+    cfg = get_settings_cfg()
+    if not cfg.exists():
+        return None
+    parser = configparser.ConfigParser()
+    parser.read(cfg, encoding="utf-8")
+    if not parser.has_section("auth"):
+        return None
+    data = {k: v for k, v in parser.items("auth")}
+    if "sub_level" in data:
+        try:
+            data["sub_level"] = int(data["sub_level"])
+        except Exception:
+            pass
+    return data
+
+
+def load_settings():
+    cfg_path = get_settings_cfg()
+    if not cfg_path.exists():
+        return {}
+    parser = configparser.ConfigParser()
+    parser.read(cfg_path, encoding="utf-8")
+    if not parser.has_section("client"):
+        return {}
+    data = {k: v for k, v in parser.items("client")}
+    for key in ("auto_java_version", "disable_openal"):
+        if key in data:
+            data[key] = _to_bool(data[key], default=False)
+    return data
+
+
+def save_settings(data: dict):
+    cfg = get_settings_cfg()
+    parser = configparser.ConfigParser()
+    if cfg.exists():
+        parser.read(cfg, encoding="utf-8")
+    if not parser.has_section("client"):
+        parser.add_section("client")
+    for key, value in data.items():
+        parser.set("client", key, str(value))
+    with cfg.open("w", encoding="utf-8") as f:
+        parser.write(f)
