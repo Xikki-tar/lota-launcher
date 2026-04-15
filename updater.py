@@ -66,7 +66,11 @@ def log(message: str) -> None:
             f.write(line)
     except Exception:
         pass
-    sys.stderr.write(line)
+    try:
+        if sys.stderr:
+            sys.stderr.write(line)
+    except Exception:
+        pass
 
 
 def detect_platform() -> str:
@@ -244,7 +248,8 @@ def launch_launcher(args: list[str]) -> int:
         return 1
 
     try:
-        process = subprocess.Popen(cmd, cwd=str(_runtime_dir()))
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if platform.system() == "Windows" else 0
+        process = subprocess.Popen(cmd, cwd=str(_runtime_dir()), creationflags=creationflags)
     except Exception as exc:
         log(f"Failed to launch launcher: {exc}")
         return 1

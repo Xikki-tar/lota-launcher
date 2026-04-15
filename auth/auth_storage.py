@@ -6,6 +6,7 @@ from pathlib import Path
 
 
 APP_DIR_NAME = "lota-launcher"
+LINUX_APP_DIR_NAME = ".lota-launcher"
 SETTINGS_FILE_NAME = "config.cfg"
 
 
@@ -25,16 +26,18 @@ def _to_bool(value, default: bool = False) -> bool:
 
 
 def _platform_app_dir(home: Path, system: str) -> Path:
+    override = os.getenv("LOTA_LAUNCHER_HOME", "").strip()
+    if override:
+        return Path(override).expanduser()
     if system == "Windows":
         return Path(os.getenv("LOCALAPPDATA", home / "AppData" / "Local")) / APP_DIR_NAME
     if system == "Darwin":
         return home / "Library" / "Application Support" / APP_DIR_NAME
-    return Path(os.getenv("XDG_DATA_HOME", home / ".local" / "share")) / APP_DIR_NAME
+    return home / LINUX_APP_DIR_NAME
 
 
 def _legacy_app_candidates(home: Path, system: str) -> list[Path]:
     candidates = [
-        home / ".lota-launcher",
         home / ".lotalauncher",
     ]
     if system == "Windows":
@@ -62,6 +65,7 @@ def _legacy_app_candidates(home: Path, system: str) -> list[Path]:
         xdg_data_home = Path(os.getenv("XDG_DATA_HOME", home / ".local" / "share"))
         candidates.extend(
             [
+                xdg_data_home / "lota-launcher",
                 xdg_data_home / "lota_launcher",
                 xdg_data_home / "LotaLauncher",
                 xdg_config_home / "lota_launcher",
@@ -97,6 +101,7 @@ def _migrate_dir(source_dir: Path, target_dir: Path) -> None:
     if target_dir.exists():
         try:
             _copy_missing_tree(source_dir, target_dir)
+            shutil.rmtree(source_dir, ignore_errors=True)
         except OSError:
             return
         return
@@ -129,7 +134,8 @@ def get_config_dir() -> Path:
     app_dir = _platform_app_dir(home, system)
     legacy_dirs = _legacy_app_candidates(home, system)
     for legacy_dir in legacy_dirs:
-        _migrate_dir(legacy_dir, app_dir)
+        if legacy_dir.resolve() != app_dir.resolve():
+            _migrate_dir(legacy_dir, app_dir)
     return _ensure_dir(app_dir, [])
 
 

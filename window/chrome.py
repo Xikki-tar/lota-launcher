@@ -1,5 +1,14 @@
+import sys
+from pathlib import Path
+
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QTextEdit, QVBoxLayout, QWidget
+
+
+def asset_path(name: str) -> Path:
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
+    return base / "assets" / name
 
 
 class AppMessageDialog(QDialog):
@@ -108,24 +117,41 @@ class WindowTitleBar(QFrame):
         self.setFixedHeight(34)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, -5, 6, 9)
+        layout.setContentsMargins(8, 0, 6, 0)
         layout.setSpacing(4)
+        raised_item_top_margin = 5
+
+        self.logo_label = QLabel()
+        self.logo_label.setProperty("windowLogo", True)
+        self.logo_label.setFixedSize(20, 20)
+        self.logo_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        logo = QPixmap(str(asset_path("logo.png")))
+        if not logo.isNull():
+            self.logo_label.setPixmap(logo.scaled(18, 18, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        layout.addWidget(self._offset_widget(self.logo_label, raised_item_top_margin))
 
         self.title_label = QLabel(host.windowTitle() or "")
         self.title_label.setProperty("windowTitleLabel", True)
         self.title_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        layout.addWidget(self.title_label)
+        layout.addWidget(self.title_label, 0, Qt.AlignVCenter)
         layout.addStretch()
 
         self.min_btn = QPushButton("-")
         self.max_btn = QPushButton("[]")
         self.close_btn = QPushButton("X")
+        self._control_wrappers = {}
+        window_controls = QHBoxLayout()
+        window_controls.setContentsMargins(0, 0, 0, 0)
+        window_controls.setSpacing(3)
 
         for btn in (self.min_btn, self.max_btn, self.close_btn):
             btn.setProperty("windowControl", True)
             btn.setCursor(Qt.PointingHandCursor)
             btn.setFixedSize(24, 18)
-            layout.addWidget(btn)
+            wrapper = self._offset_widget(btn, raised_item_top_margin)
+            self._control_wrappers[btn] = wrapper
+            window_controls.addWidget(wrapper)
+        layout.addLayout(window_controls)
 
         self.close_btn.setProperty("windowClose", True)
 
@@ -133,6 +159,16 @@ class WindowTitleBar(QFrame):
         self.max_btn.clicked.connect(self._toggle_maximized)
         self.close_btn.clicked.connect(host.close)
         self._sync_state()
+
+    def _offset_widget(self, widget: QWidget, top_margin: int) -> QWidget:
+        container = QWidget(self)
+        container.setFixedSize(widget.width(), self.height())
+        wrapper = QVBoxLayout(container)
+        wrapper.setContentsMargins(0, max(0, top_margin), 0, 0)
+        wrapper.setSpacing(0)
+        wrapper.addWidget(widget, 0, Qt.AlignTop)
+        wrapper.addStretch()
+        return container
 
     def set_title(self, title: str):
         self.title_label.setText(title or "")
@@ -150,6 +186,9 @@ class WindowTitleBar(QFrame):
         self.max_btn.setText("o" if self._host.isMaximized() else "[]")
         self.max_btn.setEnabled(self._maximize_enabled)
         self.max_btn.setVisible(self._maximize_enabled)
+        wrapper = self._control_wrappers.get(self.max_btn)
+        if wrapper:
+            wrapper.setVisible(self._maximize_enabled)
 
     def set_maximize_enabled(self, enabled: bool):
         self._maximize_enabled = enabled

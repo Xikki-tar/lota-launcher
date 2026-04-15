@@ -35,6 +35,11 @@ QLabel[windowTitleLabel="true"] {
     letter-spacing: 0.4px;
 }
 
+QLabel[windowLogo="true"] {
+    background: transparent;
+    border: none;
+}
+
 QPushButton[windowControl="true"] {
     background-color: rgba(255,255,255,0.05);
     border: 1px solid rgba(233, 163, 68, 0.25);

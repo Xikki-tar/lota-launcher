@@ -10,12 +10,13 @@ from pathlib import Path
 
 import requests
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QFont, QFontDatabase, QGuiApplication
+from PySide6.QtGui import QFont, QFontDatabase, QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QProgressBar, QTextEdit, QVBoxLayout, QWidget
 
+from desktop_integration import install_desktop_entry, set_windows_app_user_model_id
 from auth.api_base import get_api_base as resolve_api_base
 from auth.auth_storage import get_data_dir
-from window.chrome import AppWindow
+from window.chrome import AppWindow, asset_path
 from window.style import build_app_qss
 
 
@@ -185,9 +186,35 @@ def write_launcher_version(install_dir: Path, version: str) -> None:
     (install_dir / "launcher.version").write_text((version or "").strip() + "\n", encoding="utf-8")
 
 
+def _run_launcher_install_desktop(launcher_path: Path) -> bool:
+    if platform.system() != "Linux":
+        return False
+    if not launcher_path.exists():
+        return False
+    try:
+        proc = subprocess.run(
+            [str(launcher_path), "--install-desktop"],
+            cwd=str(launcher_path.parent),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=12,
+        )
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+
+def install_launcher_shortcut(install_dir: Path, launcher_artifact: dict) -> None:
+    launcher_path = _artifact_target_path(install_dir, "launcher", launcher_artifact)
+    if _run_launcher_install_desktop(launcher_path):
+        return
+    install_desktop_entry(launcher_path, asset_path("logo.ico"))
+
+
 def launch_updater(install_dir: Path, artifact: dict, passthrough_args: list[str]) -> int:
     updater_path = _artifact_target_path(install_dir, "updater", artifact)
-    subprocess.Popen([str(updater_path), *passthrough_args], cwd=str(install_dir))
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if platform.system() == "Windows" else 0
+    subprocess.Popen([str(updater_path), *passthrough_args], cwd=str(install_dir), creationflags=creationflags)
     return 0
 
 
@@ -263,6 +290,7 @@ def install_runtime(
 
     emit_status("Финализируем установку...")
     write_launcher_version(install_dir, str(launcher_artifact.get("version") or "0.0.0"))
+    install_launcher_shortcut(install_dir, launcher_artifact)
     if progress_callback:
         progress_callback(100)
 
@@ -442,6 +470,9 @@ def _build_app_font(font_family: str, pixel_size: int) -> QFont:
 
 def _setup_app_style(app: QApplication) -> None:
     asset_dir = _resource_dir() / "assets"
+    logo_path = asset_path("logo.ico") if sys.platform.startswith("win") else asset_path("logo.png")
+    if logo_path.exists():
+        app.setWindowIcon(QIcon(str(logo_path)))
     font_path = asset_dir / "fonts" / "Monocraft-ttf" / "Monocraft.ttf"
     if font_path.exists():
         font_id = QFontDatabase.addApplicationFont(str(font_path))
@@ -466,6 +497,7 @@ def main(argv: list[str]) -> int:
     os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "0"
     os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
     os.environ["QT_SCALE_FACTOR"] = "1"
+    set_windows_app_user_model_id()
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.Round
     )

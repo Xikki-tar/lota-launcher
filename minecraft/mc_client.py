@@ -352,7 +352,8 @@ def ensure_forge_version(versions_dir: Path, java_path: str, game_dir: Path, sta
 
     _ensure_launcher_profile(game_dir)
     cmd = [java_path, "-jar", str(installer_path), "--installClient"]
-    proc = subprocess.run(cmd, cwd=str(game_dir), capture_output=True, text=True)
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if platform.system() == "Windows" else 0
+    proc = subprocess.run(cmd, cwd=str(game_dir), capture_output=True, text=True, creationflags=creationflags)
     if proc.returncode != 0:
         msg = (proc.stderr or proc.stdout or "").strip()
         raise RuntimeError(msg or "Forge installer failed")

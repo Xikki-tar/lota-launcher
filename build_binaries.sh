@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$ROOT_DIR/.venv"
 PYINSTALLER="$VENV_DIR/bin/pyinstaller"
+APP_ICON="$ROOT_DIR/assets/logo.ico"
 
 if [[ ! -x "$PYINSTALLER" ]]; then
   echo "PyInstaller not found in $VENV_DIR."
@@ -12,6 +13,11 @@ if [[ ! -x "$PYINSTALLER" ]]; then
   echo "  source .venv/bin/activate"
   echo "  python -m pip install -r requirements.txt"
   echo "  python -m pip install pyinstaller"
+  exit 1
+fi
+
+if [[ ! -f "$APP_ICON" ]]; then
+  echo "App icon not found: $APP_ICON"
   exit 1
 fi
 
@@ -27,8 +33,8 @@ echo "Building launcher..."
   --clean \
   --onefile \
   --name launcher \
+  --icon "$APP_ICON" \
   --add-data "assets:assets" \
-  --add-data "assets/steve.png:assets" \
   launcher.py
 
 echo "Building updater..."
@@ -37,6 +43,7 @@ echo "Building updater..."
   --clean \
   --onefile \
   --name updater \
+  --icon "$APP_ICON" \
   updater.py
 
 echo "Building installer..."
@@ -45,6 +52,7 @@ echo "Building installer..."
   --clean \
   --onefile \
   --name installer \
+  --icon "$APP_ICON" \
   --add-data "assets:assets" \
   installer.py
 

@@ -190,7 +190,7 @@ class LibraryService:
             if (build_dir / name).exists():
                 return True
         try:
-            return any(build_dir.iterdir())
+            return any(path.name != "build.zip" for path in build_dir.iterdir())
         except Exception:
             return False
 

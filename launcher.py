@@ -3,12 +3,13 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QFontDatabase, QGuiApplication
+from PySide6.QtGui import QFont, QFontDatabase, QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication
 
+from desktop_integration import install_desktop_entry, set_windows_app_user_model_id
 from auth.auth_storage import get_config_dir, get_data_dir, load_auth_data
 from services.login_service import LoginService
-from window.chrome import AppWindow
+from window.chrome import AppWindow, asset_path
 from window.controllers.login_controller import LoginController, RegisterOverlayController
 from window.i18n import set_language, t
 from window.main_window import LauncherWindow
@@ -79,14 +80,29 @@ def main(argv: list[str]) -> int:
     get_config_dir()
     get_data_dir()
 
+    if "--install-desktop" in argv:
+        executable = Path(sys.executable)
+        args: list[str] = []
+        if Path(argv[0]).suffix == ".py":
+            args = [str(Path(argv[0]).resolve())]
+        desktop_path = install_desktop_entry(executable, asset_path("logo.ico"), args=args)
+        if desktop_path:
+            print(f"Desktop entry installed: {desktop_path}")
+        else:
+            print("Desktop entry is not supported on this platform.")
+        return 0
+
     os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "0"
     os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
     os.environ["QT_SCALE_FACTOR"] = "1"
+    set_windows_app_user_model_id()
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.Round)
 
     app = QApplication(argv)
-    base_dir = Path(__file__).resolve().parent
-    asset_dir = base_dir / "assets"
+    asset_dir = asset_path("logo.png").parent
+    logo_path = asset_path("logo.ico") if sys.platform.startswith("win") else asset_path("logo.png")
+    if logo_path.exists():
+        app.setWindowIcon(QIcon(str(logo_path)))
 
     font_path = asset_dir / "fonts" / "Monocraft-ttf" / "Monocraft.ttf"
     font_id = QFontDatabase.addApplicationFont(str(font_path))
@@ -101,6 +117,8 @@ def main(argv: list[str]) -> int:
     app.setStyleSheet(build_app_qss(str(asset_dir)))
     auth = load_auth_data()
     start_window = LauncherWindow() if auth and auth.get("token") else LoginWindow()
+    if logo_path.exists():
+        start_window.setWindowIcon(QIcon(str(logo_path)))
     start_window.apply_language()
     start_window.show()
     return app.exec()

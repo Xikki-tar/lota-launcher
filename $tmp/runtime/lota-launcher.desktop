@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=LOTA Launcher
+Comment=Играть в LOTA
+Exec="/home/xikki/Documents/progi/launcher/client/\$tmp/runtime/launcher"
+Icon=/home/xikki/Documents/progi/launcher/client/$tmp/runtime/lota-launcher.png
+Terminal=false
+Categories=Game;
+StartupNotify=true
+StartupWMClass=LOTA Launcher
