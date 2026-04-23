@@ -32,6 +32,7 @@ echo "Building launcher..."
   --noconfirm \
   --clean \
   --onefile \
+  --windowed \
   --name launcher \
   --icon "$APP_ICON" \
   --add-data "assets:assets" \
@@ -42,6 +43,7 @@ echo "Building updater..."
   --noconfirm \
   --clean \
   --onefile \
+  --windowed \
   --name updater \
   --icon "$APP_ICON" \
   updater.py
@@ -51,6 +53,7 @@ echo "Building installer..."
   --noconfirm \
   --clean \
   --onefile \
+  --windowed \
   --name installer \
   --icon "$APP_ICON" \
   --add-data "assets:assets" \

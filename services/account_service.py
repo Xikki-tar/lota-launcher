@@ -10,7 +10,19 @@ from window.i18n import t
 
 
 class AccountService:
-    RANK_NAMES = {1: "Барон", 2: "Аристократ", 3: "Спонсор"}
+    MAX_SKIN_UPLOAD_BYTES = 4 * 1024
+
+    RANK_NAMES = {
+        1: "Барон",
+        2: "Аристократ",
+        3: "Инвестор",
+        4: "Тестер",
+        5: "Старейшина",
+        6: "Junior",
+        7: "Team",
+        8: "Дракон",
+        9: "Автор",
+    }
 
     def load_profile(self) -> dict:
         auth = load_auth_data() or {}
@@ -20,6 +32,7 @@ class AccountService:
         status = str(auth.get("status") or "").lower()
         return {
             "username": username,
+            "sub_level": sub_level,
             "rank_name": rank_name,
             "is_active": status == "active",
         }
@@ -32,6 +45,36 @@ class AccountService:
         target_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source_path, target_path)
         return target_path
+
+    def upload_skin(self, source_path: str, model: str = "classic") -> dict:
+        path = Path(source_path)
+        if not path.exists():
+            return {"status_code": 0, "data": {"ok": False, "error": "skin_file_missing"}}
+        if path.stat().st_size > self.MAX_SKIN_UPLOAD_BYTES:
+            return {
+                "status_code": 413,
+                "data": {
+                    "ok": False,
+                    "error": "skin_too_large",
+                    "max_bytes": self.MAX_SKIN_UPLOAD_BYTES,
+                    "max_human": "4 KiB",
+                },
+            }
+        token = self.auth_token()
+        if not token:
+            return {"status_code": 401, "data": {"ok": False, "error": "no_token"}}
+        with path.open("rb") as file_obj:
+            response = requests.post(
+                f"{get_api_base()}/api/skins/upload",
+                data={"token": token, "model": model},
+                files={"file": ("skin.png", file_obj, "image/png")},
+                timeout=15,
+            )
+        try:
+            data = response.json()
+        except Exception:
+            data = {"ok": False, "error": "bad_response"}
+        return {"status_code": response.status_code, "data": data}
 
     def auth_token(self) -> str:
         auth = load_auth_data() or {}

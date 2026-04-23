@@ -6,6 +6,9 @@ if "%ROOT_DIR:~-1%"=="\" set "ROOT_DIR=%ROOT_DIR:~0,-1%"
 set "VENV_DIR=%ROOT_DIR%\.venv"
 set "PYINSTALLER=%VENV_DIR%\Scripts\pyinstaller.exe"
 set "APP_ICON=%ROOT_DIR%\assets\logo.ico"
+set "LAUNCHER_VERSION_INFO=%ROOT_DIR%\packaging\windows\launcher_version_info.txt"
+set "UPDATER_VERSION_INFO=%ROOT_DIR%\packaging\windows\updater_version_info.txt"
+set "INSTALLER_VERSION_INFO=%ROOT_DIR%\packaging\windows\installer_version_info.txt"
 
 if not exist "%PYINSTALLER%" (
   echo PyInstaller not found in %VENV_DIR%.
@@ -19,6 +22,21 @@ if not exist "%PYINSTALLER%" (
 
 if not exist "%APP_ICON%" (
   echo App icon not found: %APP_ICON%
+  exit /b 1
+)
+
+if not exist "%LAUNCHER_VERSION_INFO%" (
+  echo Launcher version info not found: %LAUNCHER_VERSION_INFO%
+  exit /b 1
+)
+
+if not exist "%UPDATER_VERSION_INFO%" (
+  echo Updater version info not found: %UPDATER_VERSION_INFO%
+  exit /b 1
+)
+
+if not exist "%INSTALLER_VERSION_INFO%" (
+  echo Installer version info not found: %INSTALLER_VERSION_INFO%
   exit /b 1
 )
 
@@ -37,6 +55,7 @@ echo Building launcher...
   --windowed ^
   --name launcher ^
   --icon "%APP_ICON%" ^
+  --version-file "%LAUNCHER_VERSION_INFO%" ^
   --add-data "assets;assets" ^
   launcher.py
 if errorlevel 1 exit /b %errorlevel%
@@ -49,6 +68,7 @@ echo Building updater...
   --windowed ^
   --name updater ^
   --icon "%APP_ICON%" ^
+  --version-file "%UPDATER_VERSION_INFO%" ^
   updater.py
 if errorlevel 1 exit /b %errorlevel%
 
@@ -60,6 +80,7 @@ echo Building installer...
   --windowed ^
   --name installer ^
   --icon "%APP_ICON%" ^
+  --version-file "%INSTALLER_VERSION_INFO%" ^
   --add-data "assets;assets" ^
   installer.py
 if errorlevel 1 exit /b %errorlevel%

@@ -36,5 +36,6 @@ class AuthService:
             data.get("username", auth.get("username")),
             data.get("status", auth.get("status")),
             data.get("sub_level", auth.get("sub_level")),
+            data.get("player_uuid", auth.get("player_uuid")),
         )
         return True

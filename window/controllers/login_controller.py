@@ -216,6 +216,7 @@ class RegisterOverlayController:
                 str(data.get("username") or ""),
                 str(data.get("status") or "active"),
                 int(data.get("sub_level") or 0),
+                str(data.get("player_uuid") or ""),
             )
             self.view.hide()
             self.on_auth_success()
@@ -307,6 +308,7 @@ class LoginController:
                 str(data.get("username") or self.view.username_input.text().strip()),
                 str(data.get("status") or "active"),
                 int(data.get("sub_level") or 0),
+                str(data.get("player_uuid") or ""),
             )
             self.view.hide_error()
             self.main_window_factory()

@@ -11,6 +11,7 @@ from pathlib import Path
 import requests
 
 from auth.api_base import get_api_base as resolve_api_base
+from desktop_integration import windows_hidden_subprocess_kwargs
 
 
 DEFAULT_CHANNEL = os.getenv("LOTA_LAUNCHER_CHANNEL", "stable").strip() or "stable"
@@ -40,6 +41,16 @@ def _launcher_path() -> Path:
 
 def _launcher_source_path() -> Path:
     return (_runtime_dir() / "launcher.py").resolve()
+
+
+def _windows_pythonw_executable() -> str:
+    if platform.system() != "Windows":
+        return sys.executable
+    current = Path(sys.executable)
+    candidate = current.with_name("pythonw.exe")
+    if candidate.exists():
+        return str(candidate)
+    return sys.executable
 
 
 def _launcher_version_path() -> Path:
@@ -242,14 +253,17 @@ def launch_launcher(args: list[str]) -> int:
     if launcher_path.exists():
         cmd = [str(launcher_path), *args]
     elif not getattr(sys, "frozen", False) and _launcher_source_path().exists():
-        cmd = [sys.executable, str(_launcher_source_path()), *args]
+        cmd = [_windows_pythonw_executable(), str(_launcher_source_path()), *args]
     else:
         log(f"Launcher binary not found at {launcher_path}")
         return 1
 
     try:
-        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if platform.system() == "Windows" else 0
-        process = subprocess.Popen(cmd, cwd=str(_runtime_dir()), creationflags=creationflags)
+        process = subprocess.Popen(
+            cmd,
+            cwd=str(_runtime_dir()),
+            **windows_hidden_subprocess_kwargs(),
+        )
     except Exception as exc:
         log(f"Failed to launch launcher: {exc}")
         return 1

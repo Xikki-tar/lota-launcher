@@ -130,6 +130,7 @@ def build_launch_spec(
     mem_min_mb: int,
     mem_max_mb: int,
     jvm_args: str | None = None,
+    extra_jvm_args: list[str] | None = None,
     game_dir_override: Path | None = None,
     resolution_width: int | None = None,
     resolution_height: int | None = None,
@@ -184,6 +185,8 @@ def build_launch_spec(
 
     if jvm_args:
         cmd += shlex.split(jvm_args, posix=_os_name() != "windows")
+    if extra_jvm_args:
+        cmd += [str(arg) for arg in extra_jvm_args if str(arg or "").strip()]
 
     # ensure defaults are present (unless user already provided them)
     joined = " ".join(cmd)

@@ -28,6 +28,54 @@ def get_java_version(java_path: str) -> str:
         return "unknown version"
 
 
+def get_java_major_version(java_path: str) -> int | None:
+    version_text = get_java_version(java_path)
+    normalized = str(version_text or "").strip().lower()
+    if not normalized:
+        return None
+
+    legacy = re.search(r'version "1\.(\d+)', normalized)
+    if legacy:
+        try:
+            return int(legacy.group(1))
+        except Exception:
+            return None
+
+    modern = re.search(r'version "(\d+)', normalized)
+    if modern:
+        try:
+            return int(modern.group(1))
+        except Exception:
+            return None
+
+    fallback = re.search(r"\b(\d+)(?:\.\d+)?\b", normalized)
+    if fallback:
+        try:
+            return int(fallback.group(1))
+        except Exception:
+            return None
+    return None
+
+
+def _java_candidate_sort_key(java_path: str) -> tuple[int, int, int, str]:
+    major = get_java_major_version(java_path)
+    normalized_path = normalize_path(java_path).lower()
+    is_stub = int("javapath" in normalized_path or "common files\\oracle\\java" in normalized_path)
+
+    if major == 21:
+        bucket = 0
+    elif major is not None and major > 21:
+        bucket = 1
+    elif major is not None and major >= 17:
+        bucket = 2
+    elif major is not None:
+        bucket = 3
+    else:
+        bucket = 4
+
+    return (bucket, is_stub, -(major or 0), normalized_path)
+
+
 def _candidate_from_java_home(java_home: str) -> str | None:
     if not java_home:
         return None
@@ -201,7 +249,9 @@ def _find_windows() -> list[str]:
 def find_java_candidates() -> list[str]:
     sysname = platform.system()
     if sysname == "Windows":
-        return _find_windows()
-    if sysname == "Darwin":
-        return _find_macos()
-    return _find_linux()
+        candidates = _find_windows()
+    elif sysname == "Darwin":
+        candidates = _find_macos()
+    else:
+        candidates = _find_linux()
+    return sorted(candidates, key=_java_candidate_sort_key)

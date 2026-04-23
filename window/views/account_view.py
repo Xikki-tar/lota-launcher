@@ -1,7 +1,8 @@
+import math
 import os
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QDesktopServices, QImage, QPainter, QPixmap
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QColor, QDesktopServices, QImage, QLinearGradient, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -16,6 +17,143 @@ from PySide6.QtWidgets import (
 from auth.settings import DEFAULT_STEVE
 from window.i18n import t
 from window.ui_layout import apply_layout_overrides
+
+
+RANK_GRADIENTS = {
+    1: ("#269ff5", "#005eff"),
+    2: ("#fff600", "#9e9300"),
+    3: ("#e26bff", "#06ff76"),
+    4: ("#c8ff6b", "#9fc1ff"),
+    5: ("#d363ff", "#7600b0"),
+    6: ("#0e2f29", "#79d8bb"),
+    7: ("#00719a", "#5ce8f4"),
+    8: ("#6112f4", "#4c168e"),
+}
+
+
+def flowing_gradient(rect, colors: tuple[QColor, QColor], phase: int) -> QLinearGradient:
+    angle = math.sin(phase / 60) * 0.25
+    cx = rect.center().x()
+    cy = rect.center().y()
+    length = max(1, rect.width() + rect.height()) * 0.75
+    dx = math.cos(angle) * length
+    dy = math.sin(angle) * length
+    gradient = QLinearGradient(cx - dx, cy - dy, cx + dx, cy + dy)
+    gradient.setColorAt(0.0, colors[0])
+    gradient.setColorAt(1.0, colors[1])
+    return gradient
+
+
+class GradientNickLabel(QLabel):
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self._colors: tuple[QColor, QColor] | None = None
+        self._phase = 0
+        self._timer = QTimer(self)
+        self._timer.setInterval(45)
+        self._timer.timeout.connect(self._tick)
+        self.setMinimumHeight(54)
+
+    def set_rank_level(self, sub_level: int) -> None:
+        colors = RANK_GRADIENTS.get(sub_level)
+        self._colors = tuple(QColor(color) for color in colors) if colors else None
+        if self._colors:
+            self._timer.start()
+        else:
+            self._timer.stop()
+        self.update()
+
+    def _tick(self) -> None:
+        self._phase = (self._phase + 1) % 10000
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+
+        rect = self.rect()
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(255, 255, 255, 10))
+        painter.drawRoundedRect(rect.adjusted(0, 0, -1, -1), 10, 10)
+
+        text = self.text()
+        if not text:
+            return
+
+        painter.setFont(self.font())
+        metrics = painter.fontMetrics()
+        x = 16
+        y = (rect.height() + metrics.ascent() - metrics.descent()) / 2
+
+        if not self._colors:
+            painter.setPen(QColor("#FFFFFF"))
+            painter.drawText(rect.adjusted(x, 0, -x, 0), Qt.AlignVCenter | Qt.AlignLeft, text)
+            return
+
+        path = QPainterPath()
+        path.addText(x, y, self.font(), text)
+        gradient = flowing_gradient(path.boundingRect(), self._colors, self._phase)
+        painter.fillPath(path, gradient)
+
+
+class RankBadgeLabel(QLabel):
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self._colors: tuple[QColor, QColor] | None = None
+        self._phase = 0
+        self._timer = QTimer(self)
+        self._timer.setInterval(45)
+        self._timer.timeout.connect(self._tick)
+        self.setAlignment(Qt.AlignCenter)
+        self.setMinimumHeight(42)
+
+    def set_rank_level(self, sub_level: int) -> None:
+        colors = RANK_GRADIENTS.get(sub_level)
+        self._colors = tuple(QColor(color) for color in colors) if colors else None
+        if self._colors:
+            self._timer.start()
+        else:
+            self._timer.stop()
+        self.update()
+
+    def _tick(self) -> None:
+        self._phase = (self._phase + 1) % 10000
+        self.update()
+
+    def _text_color(self) -> QColor:
+        if not self._colors:
+            return QColor("#E5E7EB")
+        max_luminance = max(
+            0.2126 * color.red() + 0.7152 * color.green() + 0.0722 * color.blue()
+            for color in self._colors
+        )
+        return QColor("#111827") if max_luminance > 165 else QColor("#FFFFFF")
+
+    def _text_outline_color(self, text_color: QColor) -> QColor:
+        is_dark_text = text_color.lightness() < 128
+        return QColor(255, 255, 255, 120) if is_dark_text else QColor(0, 0, 0, 130)
+
+    def paintEvent(self, event):
+        if not self._colors:
+            super().paintEvent(event)
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+
+        rect = self.rect()
+        gradient = flowing_gradient(rect, self._colors, self._phase)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(gradient)
+        painter.drawRoundedRect(rect.adjusted(0, 0, -1, -1), 10, 10)
+
+        text_color = self._text_color()
+        painter.setFont(self.font())
+        painter.setPen(self._text_outline_color(text_color))
+        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            painter.drawText(rect.translated(dx, dy), self.alignment(), self.text())
+        painter.setPen(text_color)
+        painter.drawText(rect, self.alignment(), self.text())
 
 
 class SkinViewer(QWidget):
@@ -216,14 +354,14 @@ class AccountView(QWidget):
         self.profile_label.setProperty("section", True)
         self.nick_caption = QLabel()
         self.nick_caption.setProperty("caption", True)
-        self.nick_label = QLabel("—")
+        self.nick_label = GradientNickLabel("—")
         self.nick_label.setStyleSheet(
             "color:#FFFFFF; font-size:24px; font-weight:600;"
             "background-color: rgba(255,255,255,0.04); border-radius:12px; padding:12px 16px;"
         )
         self.rank_caption = QLabel()
         self.rank_caption.setProperty("caption", True)
-        self.rank_label = QLabel("—")
+        self.rank_label = RankBadgeLabel("—")
         self.rank_label.setStyleSheet(
             "color:#E5E7EB; font-size:16px; font-style:italic;"
             "background-color: rgba(255,255,255,0.03); border-radius:12px; padding:10px 16px;"
@@ -284,9 +422,11 @@ class AccountView(QWidget):
         self.root_layout.addWidget(self.sidebar, stretch=0)
         apply_layout_overrides(self, "account")
 
-    def set_profile(self, username: str, rank_name: str, is_active: bool) -> None:
+    def set_profile(self, username: str, sub_level: int, rank_name: str, is_active: bool) -> None:
         self.nick_label.setText(username)
+        self.nick_label.set_rank_level(sub_level)
         self.rank_label.setText(rank_name)
+        self.rank_label.set_rank_level(sub_level)
         self.updates_badge.setText(t("account_active") if is_active else t("account_expired"))
         self.updates_badge.setStyleSheet(
             f"color:{'#052e12' if is_active else '#3b0a0a'};"

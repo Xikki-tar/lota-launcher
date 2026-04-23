@@ -28,6 +28,7 @@ class AccountController:
         profile = self.service.load_profile()
         self.view.set_profile(
             username=str(profile.get("username") or "—"),
+            sub_level=int(profile.get("sub_level") or 0),
             rank_name=str(profile.get("rank_name") or "—"),
             is_active=bool(profile.get("is_active")),
         )
@@ -46,6 +47,33 @@ class AccountController:
         if not file_path:
             return
         try:
+            payload = self.service.upload_skin(file_path)
+        except Exception:
+            show_app_message(
+                self.main_window,
+                t("account_skin"),
+                t("account_skin_upload_failed"),
+                kind="error",
+            )
+            return
+
+        data = payload.get("data") or {}
+        if payload.get("status_code") != 200 or not data.get("ok"):
+            error = str(data.get("error") or "").strip()
+            if error == "skin_too_large":
+                message = t("account_skin_too_large").format(max_human=str(data.get("max_human") or "4 KiB"))
+            elif error == "bad_skin_dimensions":
+                message = t("account_skin_bad_dimensions")
+            elif error == "bad_skin_format":
+                message = t("account_skin_bad_format")
+            elif error in {"invalid_token", "no_token", "inactive"}:
+                message = t("error_auth")
+            else:
+                message = t("account_skin_upload_failed")
+            show_app_message(self.main_window, t("account_skin"), message, kind="error")
+            return
+
+        try:
             saved_path = self.service.save_skin(file_path)
         except Exception as exc:
             show_app_message(
@@ -56,6 +84,7 @@ class AccountController:
             )
             return
         self.view.set_skin_path(str(saved_path))
+        show_app_message(self.main_window, t("account_skin"), t("account_skin_uploaded"))
 
     def on_link_discord(self) -> None:
         token = self.service.auth_token()

@@ -14,6 +14,7 @@ from PySide6.QtGui import QFont, QFontDatabase, QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QProgressBar, QTextEdit, QVBoxLayout, QWidget
 
 from desktop_integration import install_desktop_entry, set_windows_app_user_model_id
+from desktop_integration import windows_hidden_subprocess_kwargs
 from auth.api_base import get_api_base as resolve_api_base
 from auth.auth_storage import get_data_dir
 from window.chrome import AppWindow, asset_path
@@ -213,8 +214,11 @@ def install_launcher_shortcut(install_dir: Path, launcher_artifact: dict) -> Non
 
 def launch_updater(install_dir: Path, artifact: dict, passthrough_args: list[str]) -> int:
     updater_path = _artifact_target_path(install_dir, "updater", artifact)
-    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if platform.system() == "Windows" else 0
-    subprocess.Popen([str(updater_path), *passthrough_args], cwd=str(install_dir), creationflags=creationflags)
+    subprocess.Popen(
+        [str(updater_path), *passthrough_args],
+        cwd=str(install_dir),
+        **windows_hidden_subprocess_kwargs(),
+    )
     return 0
 
 

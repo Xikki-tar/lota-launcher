@@ -18,10 +18,11 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from auth.api_base import get_api_base
 from auth.auth_storage import get_data_dir, load_auth_data, load_settings, save_settings
-from auth.java_finder import find_java_candidates, get_java_version
+from auth.java_finder import find_java_candidates, get_java_major_version, get_java_version
 from minecraft.mc_client import ensure_forge_version, prepare_version
 from minecraft.mc_launch import build_launch_spec
 from services.library_service import LibraryService
+from desktop_integration import windows_hidden_subprocess_kwargs
 from window.i18n import t
 
 
@@ -79,18 +80,57 @@ def _logs_dir() -> Path:
     return path
 
 
+def _write_skin_mod_config(game_dir: Path, auth: dict, username: str) -> Path:
+    api_base = get_api_base().rstrip("/")
+    token = str(auth.get("token") or "").strip()
+    player_uuid = str(auth.get("player_uuid") or "").strip()
+    username = str(username or auth.get("username") or "Player").strip() or "Player"
+    config_path = (game_dir / "config" / "lota-skins-client.json").resolve()
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "protocol_version": 1,
+        "enabled": bool(token and api_base and username),
+        "api_base": api_base,
+        "token": token,
+        "player_uuid": player_uuid,
+        "username": username,
+        "max_batch_size": 50,
+        "min_check_interval_seconds": 120,
+        "endpoints": {
+            "check_profiles": "/api/skins/profiles/check",
+            "skin_file": "/api/skins/file/{skin_hash}",
+        },
+        "cache": {
+            "hash_algorithm": "sha256",
+            "skin_dimensions": ["64x32", "64x64"],
+            "max_skin_bytes": 4096,
+        },
+    }
+    config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        config_path.chmod(0o600)
+    except OSError:
+        pass
+    return config_path
+
+
 def _creationflags_no_window() -> int:
-    if platform.system() == "Windows":
-        return getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    return 0
+    return int(windows_hidden_subprocess_kwargs().get("creationflags", 0) or 0)
 
 
 def _prefer_java_21(java_path: str) -> str:
-    if java_path and _is_executable(java_path):
+    current_major = get_java_major_version(java_path) if java_path and _is_executable(java_path) else None
+    if current_major == 21:
         return java_path
     for candidate in find_java_candidates():
-        version = get_java_version(candidate)
-        if _java_version_is_21(version):
+        candidate_major = get_java_major_version(candidate)
+        if candidate_major == 21:
+            return candidate
+    if current_major is not None and current_major >= 17:
+        return java_path
+    for candidate in find_java_candidates():
+        candidate_major = get_java_major_version(candidate)
+        if candidate_major is not None and candidate_major >= 17:
             return candidate
     return java_path
 
@@ -189,6 +229,7 @@ class PlayWorker(QThread):
             active = str(settings.get("active_account") or "").strip().lower()
             offline_name = str(settings.get("offline_username") or auth.get("username") or "").strip()
             username = offline_name or "Player" if active in {"", "offline"} else auth.get("username") or offline_name or "Player"
+            skin_config_path = _write_skin_mod_config(game_dir, auth, username)
 
             is_linux = platform.system() == "Linux"
             disable_openal = settings.get("disable_openal", False)
@@ -214,6 +255,9 @@ class PlayWorker(QThread):
                 mem_min_mb=mem_min,
                 mem_max_mb=mem_max,
                 jvm_args=jvm_args,
+                extra_jvm_args=[
+                    f"-Dlota.skinConfig={skin_config_path}",
+                ],
                 game_dir_override=game_dir,
                 resolution_width=resolution_width,
                 resolution_height=resolution_height,

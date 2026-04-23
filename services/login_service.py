@@ -43,8 +43,15 @@ class LoginService:
     def build_worker(self, method: str, path: str, *, json_body: dict | None = None, params: dict | None = None) -> ApiRequestWorker:
         return ApiRequestWorker(method, path, json_body=json_body, params=params)
 
-    def persist_auth(self, token: str, username: str, status: str, sub_level: int) -> None:
-        save_auth_data(token, username, status, sub_level)
+    def persist_auth(
+        self,
+        token: str,
+        username: str,
+        status: str,
+        sub_level: int,
+        player_uuid: str | None = None,
+    ) -> None:
+        save_auth_data(token, username, status, sub_level, player_uuid)
 
     def persist_register_link(self, link_token: str, telegram_url: str) -> None:
         save_register_data(link_token, telegram_url)

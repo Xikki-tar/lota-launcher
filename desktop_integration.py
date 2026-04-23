@@ -25,6 +25,28 @@ def set_windows_app_user_model_id() -> None:
         pass
 
 
+def windows_hidden_subprocess_kwargs() -> dict:
+    if not sys.platform.startswith("win"):
+        return {}
+
+    startupinfo = None
+    try:
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+    except Exception:
+        startupinfo = None
+
+    creationflags = 0
+    for flag_name in ("CREATE_NO_WINDOW", "DETACHED_PROCESS"):
+        creationflags |= int(getattr(subprocess, flag_name, 0) or 0)
+
+    kwargs = {"creationflags": creationflags}
+    if startupinfo is not None:
+        kwargs["startupinfo"] = startupinfo
+    return kwargs
+
+
 def _data_home() -> Path:
     return Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share"))
 
@@ -115,7 +137,7 @@ def _install_windows_shortcut(executable: Path, icon_source: Path, args: list[st
     subprocess.run(
         ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
         check=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **windows_hidden_subprocess_kwargs(),
     )
     return shortcut_path
 

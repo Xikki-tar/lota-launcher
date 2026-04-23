@@ -90,6 +90,13 @@ class SettingsController:
             item.setData(Qt.UserRole, path)
             self.view.java_list.addItem(item)
 
+        best_path = str(candidates[0] or "").strip()
+        if best_path:
+            self.view.java_path_edit.setText(best_path)
+            self._show_selected_java_version(best_path)
+            self.view.java_list.setCurrentRow(0)
+            return
+
         self.view.set_java_version_text(t("settings_java_pick"))
 
     def on_java_item_clicked(self, item: QListWidgetItem) -> None:
