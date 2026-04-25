@@ -115,6 +115,15 @@ def main(argv: list[str]) -> int:
     from window.style import build_app_qss
 
     app.setStyleSheet(build_app_qss(str(asset_dir)))
+    if sys.platform.startswith("win"):
+        try:
+            executable = Path(sys.executable)
+            args: list[str] = []
+            if Path(argv[0]).suffix == ".py":
+                args = [str(Path(argv[0]).resolve())]
+            install_desktop_entry(executable, asset_path("logo.ico"), args=args)
+        except Exception:
+            pass
     auth = load_auth_data()
     start_window = LauncherWindow() if auth and auth.get("token") else LoginWindow()
     if logo_path.exists():

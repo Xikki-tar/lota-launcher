@@ -9,6 +9,7 @@ from auth.auth_storage import get_data_dir
 
 APP_ID = "lota-launcher"
 APP_NAME = "LOTA Launcher"
+WINDOWS_SEARCH_ALIAS = "LotaLauncher"
 ICON_NAME = "lota-launcher"
 WINDOWS_APP_DIR = "LotaLauncher"
 WINDOWS_APP_USER_MODEL_ID = "LOTA.Launcher"
@@ -120,26 +121,34 @@ def _install_windows_shortcut(executable: Path, icon_source: Path, args: list[st
     else:
         icon_target = executable
 
-    shortcut_path = _windows_start_menu_dir() / f"{APP_NAME}.lnk"
-    shortcut_path.parent.mkdir(parents=True, exist_ok=True)
     arguments = " ".join(f'"{arg}"' for arg in (args or []))
-    script = "\n".join(
-        [
-            "$shell = New-Object -ComObject WScript.Shell",
-            f"$shortcut = $shell.CreateShortcut({_powershell_quote(str(shortcut_path))})",
-            f"$shortcut.TargetPath = {_powershell_quote(str(executable))}",
-            f"$shortcut.Arguments = {_powershell_quote(arguments)}",
-            f"$shortcut.WorkingDirectory = {_powershell_quote(str(executable.parent))}",
-            f"$shortcut.IconLocation = {_powershell_quote(str(icon_target))}",
-            "$shortcut.Save()",
-        ]
-    )
+    shortcuts = [
+        _windows_start_menu_dir() / f"{APP_NAME}.lnk",
+        _windows_start_menu_dir() / f"{WINDOWS_SEARCH_ALIAS}.lnk",
+    ]
+    for shortcut_path in shortcuts:
+        shortcut_path.parent.mkdir(parents=True, exist_ok=True)
+    script_lines = [
+        "$shell = New-Object -ComObject WScript.Shell",
+    ]
+    for shortcut_path in shortcuts:
+        script_lines.extend(
+            [
+                f"$shortcut = $shell.CreateShortcut({_powershell_quote(str(shortcut_path))})",
+                f"$shortcut.TargetPath = {_powershell_quote(str(executable))}",
+                f"$shortcut.Arguments = {_powershell_quote(arguments)}",
+                f"$shortcut.WorkingDirectory = {_powershell_quote(str(executable.parent))}",
+                f"$shortcut.IconLocation = {_powershell_quote(str(icon_target))}",
+                "$shortcut.Save()",
+            ]
+        )
+    script = "\n".join(script_lines)
     subprocess.run(
         ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
         check=True,
         **windows_hidden_subprocess_kwargs(),
     )
-    return shortcut_path
+    return shortcuts[0]
 
 
 def _refresh_linux_desktop_cache(data_home: Path) -> None:

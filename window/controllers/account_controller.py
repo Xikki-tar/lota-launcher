@@ -1,4 +1,4 @@
-from PySide6.QtCore import QTimer, QUrl
+from PySide6.QtCore import QThread, QTimer, QUrl, Signal
 from PySide6.QtWidgets import QFileDialog
 
 from services.account_service import AccountService
@@ -7,12 +7,27 @@ from window.i18n import t
 from window.views.account_view import DiscordLinkDialog, SkinModelDialog
 
 
+class SkinSyncWorker(QThread):
+    done = Signal(object)
+
+    def __init__(self, service: AccountService, parent=None):
+        super().__init__(parent)
+        self.service = service
+
+    def run(self):
+        try:
+            self.done.emit(self.service.sync_skin_from_server())
+        except Exception as exc:
+            self.done.emit({"ok": False, "error": str(exc)})
+
+
 class AccountController:
     def __init__(self, view, main_window, service: AccountService | None = None):
         self.view = view
         self.main_window = main_window
         self.service = service or AccountService()
         self._discord_dialog: DiscordLinkDialog | None = None
+        self._skin_sync_worker: SkinSyncWorker | None = None
         self._discord_poll_timer = QTimer(self.view)
         self._discord_poll_timer.setInterval(3000)
         self._discord_poll_timer.timeout.connect(self._poll_discord_status)
@@ -33,6 +48,7 @@ class AccountController:
             is_active=bool(profile.get("is_active")),
         )
         self.view.set_skin_path(str(self.service.skin_file()))
+        self._refresh_skin_from_server()
 
     def on_back(self) -> None:
         self.main_window.show_home()
@@ -89,6 +105,26 @@ class AccountController:
             return
         self.view.set_skin_path(str(saved_path))
         show_app_message(self.main_window, t("account_skin"), t("account_skin_uploaded"))
+
+    def _refresh_skin_from_server(self) -> None:
+        if self._skin_sync_worker and self._skin_sync_worker.isRunning():
+            return
+        worker = SkinSyncWorker(self.service, self.view)
+        self._skin_sync_worker = worker
+        worker.done.connect(self._on_skin_synced)
+        worker.finished.connect(lambda: self._clear_skin_sync_worker(worker))
+        worker.start()
+
+    def _on_skin_synced(self, payload: dict) -> None:
+        if not isinstance(payload, dict) or not payload.get("ok"):
+            return
+        path = str(payload.get("path") or "").strip()
+        if path:
+            self.view.set_skin_path(path)
+
+    def _clear_skin_sync_worker(self, worker) -> None:
+        if self._skin_sync_worker is worker:
+            self._skin_sync_worker = None
 
     def on_link_discord(self) -> None:
         token = self.service.auth_token()
