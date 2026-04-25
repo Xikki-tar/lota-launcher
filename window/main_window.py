@@ -5,6 +5,7 @@ from auth.auth_service import AuthService
 from window.account_window import AccountWindow
 from window.chrome import AppWindow, ask_app_confirmation
 from window.controllers.home_controller import HomeController
+from window.friends_window import FriendsWindow
 from window.i18n import t
 from window.library_window import LibraryWindow
 from window.settings_window import SettingsWindow
@@ -56,11 +57,13 @@ class LauncherWindow(AppWindow):
         self.settings_page = SettingsWindow(self)
         self.library_page = LibraryWindow(self)
         self.account_page = AccountWindow(self)
+        self.friends_page = FriendsWindow(self)
 
         self.stack.addWidget(self.home_page)
         self.stack.addWidget(self.settings_page)
         self.stack.addWidget(self.library_page)
         self.stack.addWidget(self.account_page)
+        self.stack.addWidget(self.friends_page)
         self.stack.setCurrentWidget(self.home_page)
 
         self._anim = None
@@ -100,6 +103,10 @@ class LauncherWindow(AppWindow):
         self.refresh_auth_background()
         self._animate_to(self.account_page)
 
+    def show_friends(self):
+        self.friends_page.refresh()
+        self._animate_to(self.friends_page)
+
     def show_library(self):
         self.library_page.refresh()
         self._animate_to(self.library_page)
@@ -114,6 +121,7 @@ class LauncherWindow(AppWindow):
         self.settings_page.apply_language()
         self.library_page.apply_language()
         self.account_page.apply_language()
+        self.friends_page.controller.apply_language()
 
     def refresh_auth_background(self):
         if self._closing:
@@ -153,6 +161,8 @@ class LauncherWindow(AppWindow):
             self.home_page.controller.shutdown()
         if hasattr(self, "library_page"):
             self.library_page.controller.shutdown()
+        if hasattr(self, "friends_page"):
+            self.friends_page.controller.shutdown()
         if self._auth_refresh_worker and self._auth_refresh_worker.isRunning():
             self._auth_refresh_worker.wait()
         if not self._auth_refresh_worker or not self._auth_refresh_worker.isRunning():

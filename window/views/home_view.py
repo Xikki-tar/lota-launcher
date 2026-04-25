@@ -261,6 +261,7 @@ class HomeView(QWidget):
 
         self.btn_account = QPushButton()
         self.btn_library = QPushButton()
+        self.btn_friends = QPushButton()
         self.btn_settings = QPushButton()
         self.btn_exit = QPushButton()
 
@@ -279,6 +280,7 @@ class HomeView(QWidget):
 
         self.sidebar_layout.addWidget(self.btn_account)
         self.sidebar_layout.addWidget(self.btn_library)
+        self.sidebar_layout.addWidget(self.btn_friends)
         self.sidebar_layout.addWidget(self.btn_settings)
         self.sidebar_layout.addStretch()
 
@@ -307,6 +309,7 @@ class HomeView(QWidget):
         self.btn_play.setText(t("btn_close") if is_mc_running else t("btn_play"))
         self.btn_account.setText(t("btn_account"))
         self.btn_library.setText(t("btn_library"))
+        self.btn_friends.setText(t("btn_friends"))
         self.btn_settings.setText(t("btn_settings"))
         self.btn_exit.setText(t("btn_exit"))
         apply_layout_overrides(self, "home")

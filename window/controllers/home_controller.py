@@ -51,6 +51,7 @@ class HomeController:
     def _connect_signals(self):
         self.view.btn_account.clicked.connect(self.main_window.show_account)
         self.view.btn_library.clicked.connect(self.main_window.show_library)
+        self.view.btn_friends.clicked.connect(self.main_window.show_friends)
         self.view.btn_settings.clicked.connect(self.main_window.show_settings)
         self.view.btn_exit.clicked.connect(self.main_window.on_exit_clicked)
         self.view.btn_play.clicked.connect(self.on_play_clicked)

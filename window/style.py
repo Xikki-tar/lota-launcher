@@ -338,6 +338,45 @@ QFrame[newsDetailPanel="true"] {
     border: 1px solid #3A2A1A;
 }
 
+QFrame[friendsSearchCard="true"],
+QFrame[friendsSection="true"],
+QFrame[friendsCard="true"] {
+    background-color: qlineargradient(
+        x1: 0, y1: 0, x2: 1, y2: 1,
+        stop: 0 #1D1712, stop: 1 #261C13
+    );
+    border-radius: 18px;
+    border: 1px solid #3A2A1A;
+}
+
+QLabel[friendsUserTitle="true"] {
+    font-size: 18px;
+    font-weight: 800;
+    color: #F7E4C8;
+}
+
+QLabel[friendsStatus="true"] {
+    font-size: 13px;
+    color: #D5C3AB;
+}
+
+QLabel[friendsMeta="true"] {
+    font-size: 12px;
+    color: #BFA88C;
+}
+
+QLabel[friendsBadge="true"],
+QLabel[friendsCountBadge="true"] {
+    background-color: rgba(233, 163, 68, 0.18);
+    color: #F2C37F;
+    border: 1px solid rgba(233, 163, 68, 0.45);
+    border-radius: 10px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 700;
+    min-width: 24px;
+}
+
 QLabel[newsDetailTitle="true"] {
     font-size: 18px;
     font-weight: 800;
