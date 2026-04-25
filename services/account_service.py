@@ -5,7 +5,7 @@ from pathlib import Path
 import requests
 
 from auth.api_base import get_api_base
-from auth.auth_storage import get_skin_file, load_auth_data
+from auth.auth_storage import get_skin_file, load_auth_data, save_skin_model
 from window.i18n import t
 
 
@@ -40,10 +40,11 @@ class AccountService:
     def skin_file(self) -> Path:
         return get_skin_file()
 
-    def save_skin(self, source_path: str) -> Path:
+    def save_skin(self, source_path: str, model: str = "classic") -> Path:
         target_path = self.skin_file()
         target_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source_path, target_path)
+        save_skin_model(model)
         return target_path
 
     def upload_skin(self, source_path: str, model: str = "classic") -> dict:

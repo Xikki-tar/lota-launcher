@@ -4,7 +4,7 @@ from PySide6.QtWidgets import QFileDialog
 from services.account_service import AccountService
 from window.chrome import show_app_message
 from window.i18n import t
-from window.views.account_view import DiscordLinkDialog
+from window.views.account_view import DiscordLinkDialog, SkinModelDialog
 
 
 class AccountController:
@@ -46,8 +46,12 @@ class AccountController:
         )
         if not file_path:
             return
+        model_dialog = SkinModelDialog(self.view)
+        if model_dialog.exec() != SkinModelDialog.Accepted:
+            return
+        selected_model = model_dialog.selected_model()
         try:
-            payload = self.service.upload_skin(file_path)
+            payload = self.service.upload_skin(file_path, model=selected_model)
         except Exception:
             show_app_message(
                 self.main_window,
@@ -74,7 +78,7 @@ class AccountController:
             return
 
         try:
-            saved_path = self.service.save_skin(file_path)
+            saved_path = self.service.save_skin(file_path, model=selected_model)
         except Exception as exc:
             show_app_message(
                 self.main_window,

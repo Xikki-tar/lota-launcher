@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 
 from auth.settings import DEFAULT_STEVE
 from window.i18n import t
+from window.skin_render import render_skin_model_pixmap
 from window.ui_layout import apply_layout_overrides
 
 
@@ -160,12 +161,14 @@ class SkinViewer(QWidget):
     def __init__(self, skin_path=None, parent=None):
         super().__init__(parent)
         self._skin: QImage | None = None
+        self._skin_path: str | None = None
         self.setMinimumSize(220, 360)
         self.setProperty("panel2", True)
         self.set_skin_path(skin_path)
 
     def set_skin_path(self, path: str | None):
         img_path = path if path and os.path.exists(path) else DEFAULT_STEVE
+        self._skin_path = img_path
         img = QImage(img_path)
         self._skin = None if img.isNull() else img
         self.update()
@@ -189,74 +192,8 @@ class SkinViewer(QWidget):
             painter.setPen(Qt.white)
             painter.drawText(rect, Qt.AlignCenter, t("skin_no_skin"))
             return
-
-        if self._skin.width() < 64 or self._skin.height() < 32:
-            pm = QPixmap.fromImage(self._skin).scaled(rect.size(), Qt.KeepAspectRatio, Qt.FastTransformation)
-            painter.drawPixmap(rect.center().x() - pm.width() // 2, rect.center().y() - pm.height() // 2, pm)
-            return
-
-        head_img = self._crop(8, 8, 8, 8)
-        body_img = self._crop(20, 20, 8, 12)
-        arm_img = self._crop(44, 20, 4, 12)
-        leg_img = self._crop(4, 20, 4, 12)
-        has_overlay = self._skin.height() >= 64
-
-        head_ov_img = self._crop(40, 8, 8, 8) if has_overlay else None
-        body_ov_img = self._crop(20, 36, 8, 12) if has_overlay else None
-        arm_ov_img = self._crop(44, 36, 4, 12) if has_overlay else None
-        leg_ov_img = self._crop(4, 36, 4, 12) if has_overlay else None
-
-        if not all([head_img, body_img, arm_img, leg_img]):
-            pm = QPixmap.fromImage(self._skin).scaled(rect.size(), Qt.KeepAspectRatio, Qt.FastTransformation)
-            painter.drawPixmap(rect.center().x() - pm.width() // 2, rect.center().y() - pm.height() // 2, pm)
-            return
-
-        pix_total_h = 8 + 12 + 12
-        scale = min(max(1, rect.height() // pix_total_h), 16)
-        head_h, body_h, limb_h = 8 * scale, 12 * scale, 12 * scale
-        head_w, body_w, limb_w = 8 * scale, 8 * scale, 4 * scale
-
-        model_pm = QPixmap(limb_w + body_w + limb_w, head_h + body_h + limb_h)
-        model_pm.fill(Qt.transparent)
-        mp = QPainter(model_pm)
-        mp.setRenderHint(QPainter.Antialiasing, False)
-        mp.setRenderHint(QPainter.SmoothPixmapTransform, False)
-
-        def scale_img(img: QImage | None, w_px: int, h_px: int) -> QPixmap | None:
-            if img is None:
-                return None
-            return QPixmap.fromImage(img).scaled(w_px, h_px, Qt.IgnoreAspectRatio, Qt.FastTransformation)
-
-        head = scale_img(head_img, head_w, head_h)
-        body = scale_img(body_img, body_w, body_h)
-        arm = scale_img(arm_img, limb_w, limb_h)
-        leg = scale_img(leg_img, limb_w, limb_h)
-
-        pad = max(0, int(scale * 0.2))
-        head_ov = scale_img(head_ov_img, head_w + 2 * pad, head_h + 2 * pad)
-        body_ov = scale_img(body_ov_img, body_w + 2 * pad, body_h + 2 * pad)
-        arm_ov = scale_img(arm_ov_img, limb_w + 2 * pad, limb_h + 2 * pad)
-        leg_ov = scale_img(leg_ov_img, limb_w + 2 * pad, limb_h + 2 * pad)
-
-        def draw_part(x, y, base_pm: QPixmap, ov_pm: QPixmap | None):
-            mp.drawPixmap(x, y, base_pm)
-            if ov_pm:
-                mp.drawPixmap(x - pad, y - pad, ov_pm)
-
-        x_body = limb_w
-        y_body = head_h
-        y_leg = head_h + body_h
-        draw_part(x_body, 0, head, head_ov)
-        draw_part(x_body, y_body, body, body_ov)
-        draw_part(0, y_body, arm, arm_ov)
-        draw_part(limb_w + body_w, y_body, arm, arm_ov)
-        draw_part(x_body, y_leg, leg, leg_ov)
-        draw_part(x_body + limb_w, y_leg, leg, leg_ov)
-        mp.end()
-
-        x = rect.center().x() - model_pm.width() // 2
-        y = rect.center().y() - model_pm.height() // 2
-        painter.drawPixmap(x, y, model_pm)
+        pm = render_skin_model_pixmap(rect.width(), rect.height(), self._skin_path, margin=0)
+        painter.drawPixmap(rect.left(), rect.top(), pm)
 
 
 class DiscordLinkDialog(QDialog):
@@ -330,6 +267,64 @@ class DiscordLinkDialog(QDialog):
 
     def _open_discord(self):
         QDesktopServices.openUrl(self._discord_url)
+
+
+class SkinModelDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._selected_model = "classic"
+
+        self.setWindowTitle(t("account_skin_model_title"))
+        self.setModal(True)
+        self.setFixedSize(420, 220)
+        self.setObjectName("RootWindow")
+
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(20, 20, 20, 20)
+        root_layout.setSpacing(0)
+
+        self.card = QFrame()
+        self.card.setProperty("panel2", True)
+        root_layout.addWidget(self.card)
+
+        card_layout = QVBoxLayout(self.card)
+        card_layout.setContentsMargins(20, 20, 20, 20)
+        card_layout.setSpacing(12)
+
+        self.title_label = QLabel()
+        self.title_label.setProperty("section", True)
+        card_layout.addWidget(self.title_label)
+
+        self.classic_button = QPushButton()
+        self.classic_button.setProperty("secondary", True)
+        self.slim_button = QPushButton()
+        self.slim_button.setProperty("secondary", True)
+        self.cancel_button = QPushButton()
+        self.cancel_button.setProperty("secondary", True)
+
+        card_layout.addWidget(self.classic_button)
+        card_layout.addWidget(self.slim_button)
+        card_layout.addStretch()
+        card_layout.addWidget(self.cancel_button)
+
+        self.classic_button.clicked.connect(lambda: self._choose("classic"))
+        self.slim_button.clicked.connect(lambda: self._choose("slim"))
+        self.cancel_button.clicked.connect(self.reject)
+        self.apply_language()
+
+    def apply_language(self):
+        self.setWindowTitle(t("account_skin_model_title"))
+        self.title_label.setText(t("account_skin_model_title"))
+        self.classic_button.setText(t("account_skin_model_classic"))
+        self.slim_button.setText(t("account_skin_model_slim"))
+        self.cancel_button.setText(t("btn_close"))
+
+    def _choose(self, model: str) -> None:
+        self._selected_model = model
+        self.accept()
+
+    def selected_model(self) -> str:
+        return self._selected_model
 
 
 class AccountView(QWidget):

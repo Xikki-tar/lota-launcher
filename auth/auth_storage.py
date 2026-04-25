@@ -211,6 +211,27 @@ def get_skin_file() -> Path:
     return get_data_dir() / "skin.png"
 
 
+def save_skin_model(model: str) -> None:
+    cfg = get_settings_cfg()
+    parser = configparser.ConfigParser()
+    if cfg.exists():
+        parser.read(cfg, encoding="utf-8")
+    if not parser.has_section("auth"):
+        parser.add_section("auth")
+    normalized = str(model or "classic").strip().lower()
+    if normalized not in {"classic", "slim"}:
+        normalized = "classic"
+    parser.set("auth", "skin_model", normalized)
+    with cfg.open("w", encoding="utf-8") as f:
+        parser.write(f)
+
+
+def load_skin_model() -> str:
+    auth = load_auth_data() or {}
+    model = str(auth.get("skin_model") or "classic").strip().lower()
+    return model if model in {"classic", "slim"} else "classic"
+
+
 def save_auth_data(token: str, username: str, status: str, sub_level: int, player_uuid: str | None = None):
     cfg = get_settings_cfg()
     parser = configparser.ConfigParser()
