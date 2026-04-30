@@ -33,7 +33,7 @@ echo "Building launcher..."
   --clean \
   --onefile \
   --windowed \
-  --name launcher \
+  --name Lota-launcher \
   --icon "$APP_ICON" \
   --add-data "assets:assets" \
   launcher.py
@@ -46,6 +46,7 @@ echo "Building updater..."
   --windowed \
   --name updater \
   --icon "$APP_ICON" \
+  --add-data "assets:assets" \
   updater.py
 
 echo "Building installer..."

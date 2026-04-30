@@ -82,9 +82,14 @@ def fetch_runtime_manifest(channel: str) -> dict:
 
 
 def _artifact_target_path(install_dir: Path, artifact_name: str, artifact: dict) -> Path:
-    filename = str(artifact.get("filename") or artifact_name).strip()
+    default_names = {
+        "launcher": "Lota-launcher.exe" if platform.system() == "Windows" else "Lota-launcher",
+        "updater": "updater.exe" if platform.system() == "Windows" else "updater",
+        "installer": "installer.exe" if platform.system() == "Windows" else "installer",
+    }
+    filename = str(artifact.get("filename") or default_names.get(artifact_name, artifact_name)).strip()
     if not filename:
-        filename = artifact_name
+        filename = default_names.get(artifact_name, artifact_name)
     return install_dir / filename
 
 

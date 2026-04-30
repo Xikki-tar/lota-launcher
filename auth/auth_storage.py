@@ -249,6 +249,18 @@ def save_auth_data(token: str, username: str, status: str, sub_level: int, playe
         parser.write(f)
 
 
+def clear_auth_data() -> None:
+    cfg = get_settings_cfg()
+    if not cfg.exists():
+        return
+    parser = configparser.ConfigParser()
+    parser.read(cfg, encoding="utf-8")
+    if parser.has_section("auth"):
+        parser.remove_section("auth")
+        with cfg.open("w", encoding="utf-8") as f:
+            parser.write(f)
+
+
 def save_register_data(link_token: str, telegram_url: str):
     cfg = get_settings_cfg()
     parser = configparser.ConfigParser()

@@ -52,6 +52,14 @@ def _data_home() -> Path:
     return Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share"))
 
 
+def _linux_desktop_dir() -> Path | None:
+    raw = os.getenv("XDG_DESKTOP_DIR", "").strip()
+    if raw:
+        return Path(raw.replace("$HOME", str(Path.home()))).expanduser()
+    candidate = Path.home() / "Desktop"
+    return candidate if candidate.exists() else None
+
+
 def _desktop_quote(value: str) -> str:
     escaped = (
         value
@@ -106,6 +114,13 @@ def _windows_start_menu_dir() -> Path:
     return Path.home() / "AppData" / "Roaming" / "Microsoft" / "Windows" / "Start Menu" / "Programs"
 
 
+def _windows_desktop_dir() -> Path:
+    userprofile = os.getenv("USERPROFILE")
+    if userprofile:
+        return Path(userprofile) / "Desktop"
+    return Path.home() / "Desktop"
+
+
 def _sibling_icon(icon_source: Path, suffix: str) -> Path:
     candidate = icon_source.with_suffix(suffix)
     return candidate if candidate.exists() else icon_source
@@ -123,6 +138,7 @@ def _install_windows_shortcut(executable: Path, icon_source: Path, args: list[st
 
     arguments = " ".join(f'"{arg}"' for arg in (args or []))
     shortcuts = [
+        _windows_desktop_dir() / f"{APP_NAME}.lnk",
         _windows_start_menu_dir() / f"{APP_NAME}.lnk",
         _windows_start_menu_dir() / f"{WINDOWS_SEARCH_ALIAS}.lnk",
     ]
@@ -184,10 +200,14 @@ def install_desktop_entry(
     data_home = _data_home()
 
     icon_dir = data_home / "icons" / "hicolor" / "32x32" / "apps"
+    scalable_icon_dir = data_home / "icons" / "hicolor" / "scalable" / "apps"
     icon_dir.mkdir(parents=True, exist_ok=True)
+    scalable_icon_dir.mkdir(parents=True, exist_ok=True)
     if icon_source.exists():
         icon_target = icon_dir / f"{ICON_NAME}.png"
+        scalable_icon_target = scalable_icon_dir / f"{ICON_NAME}.png"
         shutil.copyfile(icon_source, icon_target)
+        shutil.copyfile(icon_source, scalable_icon_target)
         local_icon = executable.parent / f"{ICON_NAME}.png"
         try:
             shutil.copyfile(icon_source, local_icon)
@@ -201,6 +221,13 @@ def install_desktop_entry(
     desktop_path = applications_dir / f"{APP_ID}.desktop"
     _write_linux_desktop_file(desktop_path, executable, ICON_NAME, args)
     local_desktop_path = executable.parent / f"{APP_ID}.desktop"
-    _write_linux_desktop_file(local_desktop_path, executable, str(local_icon), args)
+    try:
+        _write_linux_desktop_file(local_desktop_path, executable, str(local_icon), args)
+    except OSError:
+        pass
+    user_desktop_dir = _linux_desktop_dir()
+    if user_desktop_dir is not None:
+        user_desktop_dir.mkdir(parents=True, exist_ok=True)
+        _write_linux_desktop_file(user_desktop_dir / f"{APP_NAME}.desktop", executable, str(local_icon), args)
     _refresh_linux_desktop_cache(data_home)
     return desktop_path

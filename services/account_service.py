@@ -85,43 +85,32 @@ class AccountService:
         if not token or (not player_uuid and not username):
             return {"ok": False, "error": "no_profile_identity"}
 
-        profile_payloads = [
-            {"player_uuid": player_uuid, "username": username},
-            {"player_uuid": player_uuid},
-            {"username": username},
-        ]
-        request_variants = [
-            {"token": token, "profiles": [payload for payload in profile_payloads if any(payload.values())][:1]},
-            {"token": token, "players": [payload for payload in profile_payloads if any(payload.values())][:1]},
-            {"token": token, "player_uuid": player_uuid, "username": username},
-            {"token": token, "uuid": player_uuid, "username": username},
-        ]
+        identity_payload = {}
+        if player_uuid:
+            identity_payload["player_uuid"] = player_uuid
+        if username:
+            identity_payload["username"] = username
 
-        profile_data = None
-        last_error = "profile_check_failed"
-        for body in request_variants:
-            try:
-                response = requests.post(
-                    f"{get_api_base()}/api/skins/profiles/check",
-                    json=body,
-                    timeout=10,
-                )
-            except Exception:
-                continue
-            if response.status_code != 200:
-                last_error = f"http_{response.status_code}"
-                continue
-            try:
-                data = response.json()
-            except Exception:
-                last_error = "bad_response"
-                continue
-            profile_data = self._extract_skin_profile(data)
-            if profile_data:
-                break
+        try:
+            response = requests.post(
+                f"{get_api_base()}/api/skins/profiles/check",
+                json={"token": token, "players": [identity_payload]},
+                timeout=10,
+            )
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
 
+        if response.status_code != 200:
+            return {"ok": False, "error": f"http_{response.status_code}"}
+
+        try:
+            data = response.json()
+        except Exception:
+            return {"ok": False, "error": "bad_response"}
+
+        profile_data = self._extract_skin_profile(data)
         if not profile_data:
-            return {"ok": False, "error": last_error}
+            return {"ok": False, "error": "profile_not_found"}
 
         skin_hash = str(profile_data.get("skin_hash") or profile_data.get("hash") or "").strip()
         if not skin_hash:
@@ -172,6 +161,12 @@ class AccountService:
 
         for key in ("profiles", "results", "players", "entries", "items"):
             candidate = data.get(key)
+            if isinstance(candidate, dict):
+                for item in candidate.values():
+                    if isinstance(item, dict):
+                        profile = self._extract_skin_profile(item)
+                        if profile:
+                            return profile
             if isinstance(candidate, list):
                 for item in candidate:
                     if isinstance(item, dict):
@@ -207,4 +202,4 @@ class AccountService:
         }
 
     def discord_bot_url(self) -> str:
-        return os.getenv("DISCORD_BOT_URL", "https://discord.gg/zZ2KHxaGNv")
+        return os.getenv("DISCORD_BOT_URL", "discord://-/users/1439960380377006142")

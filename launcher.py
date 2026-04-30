@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -6,7 +7,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QFontDatabase, QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication
 
-from desktop_integration import install_desktop_entry, set_windows_app_user_model_id
+from desktop_integration import install_desktop_entry, set_windows_app_user_model_id, windows_hidden_subprocess_kwargs
 from auth.auth_storage import get_config_dir, get_data_dir, load_auth_data
 from services.login_service import LoginService
 from window.chrome import AppWindow, asset_path
@@ -14,6 +15,65 @@ from window.controllers.login_controller import LoginController, RegisterOverlay
 from window.i18n import set_language, t
 from window.main_window import LauncherWindow
 from window.views.login_view import LoginView, RegisterLinksOverlay
+
+
+SKIP_UPDATER_ARG = "--skip-updater"
+
+
+def _runtime_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def _updater_binary_name() -> str:
+    return "updater.exe" if sys.platform.startswith("win") else "updater"
+
+
+def _updater_path() -> Path:
+    return (_runtime_dir() / _updater_binary_name()).resolve()
+
+
+def _updater_source_path() -> Path:
+    return (_runtime_dir() / "updater.py").resolve()
+
+
+def _launcher_args(argv: list[str]) -> list[str]:
+    return [arg for arg in argv[1:] if arg != SKIP_UPDATER_ARG]
+
+
+def _launch_updater(argv: list[str]) -> bool:
+    if SKIP_UPDATER_ARG in argv[1:] or os.getenv("LOTA_LAUNCHER_SKIP_UPDATER", "").strip() == "1":
+        return False
+
+    updater_path = _updater_path()
+    if updater_path.exists():
+        cmd = [str(updater_path), *_launcher_args(argv)]
+    elif not getattr(sys, "frozen", False) and _updater_source_path().exists():
+        cmd = [sys.executable, str(_updater_source_path()), *_launcher_args(argv)]
+    else:
+        return False
+
+    try:
+        subprocess.Popen(
+            cmd,
+            cwd=str(_runtime_dir()),
+            **windows_hidden_subprocess_kwargs(),
+        )
+    except Exception:
+        return False
+    return True
+
+
+def _refresh_desktop_entry(argv: list[str]) -> None:
+    try:
+        executable = Path(sys.executable)
+        args: list[str] = []
+        if Path(argv[0]).suffix == ".py":
+            args = [str(Path(argv[0]).resolve())]
+        install_desktop_entry(executable, asset_path("logo.ico"), args=args)
+    except Exception:
+        pass
 
 
 def _build_app_font(font_family: str, pixel_size: int) -> QFont:
@@ -57,7 +117,7 @@ class LoginWindow(AppWindow):
         self.apply_language()
 
     def open_main_window(self):
-        self.main_window = LauncherWindow()
+        self.main_window = LauncherWindow(on_auth_invalid=LoginWindow)
         self.main_window.show()
         self.close()
 
@@ -92,6 +152,11 @@ def main(argv: list[str]) -> int:
             print("Desktop entry is not supported on this platform.")
         return 0
 
+    if _launch_updater(argv):
+        return 0
+
+    argv = [argv[0], *_launcher_args(argv)]
+
     os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "0"
     os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
     os.environ["QT_SCALE_FACTOR"] = "1"
@@ -115,17 +180,10 @@ def main(argv: list[str]) -> int:
     from window.style import build_app_qss
 
     app.setStyleSheet(build_app_qss(str(asset_dir)))
-    if sys.platform.startswith("win"):
-        try:
-            executable = Path(sys.executable)
-            args: list[str] = []
-            if Path(argv[0]).suffix == ".py":
-                args = [str(Path(argv[0]).resolve())]
-            install_desktop_entry(executable, asset_path("logo.ico"), args=args)
-        except Exception:
-            pass
+    if sys.platform.startswith("win") or sys.platform.startswith("linux"):
+        _refresh_desktop_entry(argv)
     auth = load_auth_data()
-    start_window = LauncherWindow() if auth and auth.get("token") else LoginWindow()
+    start_window = LauncherWindow(on_auth_invalid=LoginWindow) if auth and auth.get("token") else LoginWindow()
     if logo_path.exists():
         start_window.setWindowIcon(QIcon(str(logo_path)))
     start_window.apply_language()

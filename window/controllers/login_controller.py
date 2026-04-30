@@ -1,7 +1,7 @@
 from PySide6.QtCore import QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 
-from services.login_service import LoginService
+from services.login_service import LoginService, normalize_telegram_register_url
 from window.i18n import t
 
 
@@ -38,7 +38,7 @@ class RegisterOverlayController:
         self.view.setGeometry(self.view.parentWidget().rect())
         saved = self.service.load_saved_register_link() or {}
         self.view._link_token = str(saved.get("link_token") or "").strip()
-        self.view._telegram_url = str(saved.get("telegram_url") or saved.get("action_value") or "").strip()
+        self.view._telegram_url = normalize_telegram_register_url(str(saved.get("telegram_url") or saved.get("action_value") or ""))
         self.view.username_input.clear()
         self.view.hide_error()
         if self.view._link_token and self.view._telegram_url:
@@ -141,7 +141,7 @@ class RegisterOverlayController:
             self.view.show_error(t("error_server"))
             return
         self.view._link_token = str(data.get("link_token") or "").strip()
-        self.view._telegram_url = str(data.get("telegram_url") or "").strip()
+        self.view._telegram_url = normalize_telegram_register_url(str(data.get("telegram_url") or ""))
         if self.view._link_token and self.view._telegram_url:
             self.service.persist_register_link(self.view._link_token, self.view._telegram_url)
         self.view.hide_error()

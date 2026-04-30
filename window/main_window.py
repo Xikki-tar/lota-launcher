@@ -1,7 +1,10 @@
+from collections.abc import Callable
+
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QThread, QTimer, Signal
 from PySide6.QtWidgets import QApplication, QGraphicsOpacityEffect, QStackedWidget, QWidget
 
-from auth.auth_service import AuthService
+from auth.auth_service import AuthRefreshResult, AuthService
+from auth.auth_storage import clear_auth_data
 from window.account_window import AccountWindow
 from window.chrome import AppWindow, ask_app_confirmation
 from window.controllers.home_controller import HomeController
@@ -13,11 +16,11 @@ from window.views.home_view import HomeView
 
 
 class AuthRefreshWorker(QThread):
-    done = Signal(bool)
+    done = Signal(object)
 
     def run(self):
-        ok = AuthService.refresh()
-        self.done.emit(ok)
+        result = AuthService.refresh()
+        self.done.emit(result)
 
 
 class HomePage(HomeView):
@@ -44,8 +47,9 @@ class HomePage(HomeView):
 
 
 class LauncherWindow(AppWindow):
-    def __init__(self):
+    def __init__(self, on_auth_invalid: Callable[[], QWidget] | None = None):
         super().__init__()
+        self._on_auth_invalid = on_auth_invalid
         self.setObjectName("RootWindow")
         self.setWindowTitle(t("app_title_main"))
         self.set_locked_window_size(960, 640)
@@ -134,11 +138,29 @@ class LauncherWindow(AppWindow):
         worker.finished.connect(lambda: self._clear_auth_refresh_worker(worker))
         worker.start()
 
-    def _on_auth_refreshed(self, _ok: bool):
+    def _on_auth_refreshed(self, result: AuthRefreshResult):
         if self._closing:
+            return
+        if result.rejected:
+            self.return_to_login()
             return
         self.home_page.refresh_profile()
         self.account_page.refresh()
+
+    def return_to_login(self) -> None:
+        if self._closing:
+            return
+        clear_auth_data()
+        self._closing = True
+        self._close_confirmed = True
+        self._auth_refresh_timer.stop()
+        login_window = self._on_auth_invalid() if self._on_auth_invalid else None
+        if login_window is not None:
+            self.login_window = login_window
+            login_window.show()
+            if hasattr(login_window, "show_toast"):
+                login_window.show_toast(t("auth_session_expired"))
+        self.close()
 
     def _clear_auth_refresh_worker(self, worker) -> None:
         if self._auth_refresh_worker is worker:

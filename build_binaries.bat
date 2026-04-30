@@ -53,7 +53,7 @@ echo Building launcher...
   --clean ^
   --onefile ^
   --windowed ^
-  --name launcher ^
+  --name Lota-launcher ^
   --icon "%APP_ICON%" ^
   --version-file "%LAUNCHER_VERSION_INFO%" ^
   --add-data "assets;assets" ^
@@ -69,6 +69,7 @@ echo Building updater...
   --name updater ^
   --icon "%APP_ICON%" ^
   --version-file "%UPDATER_VERSION_INFO%" ^
+  --add-data "assets;assets" ^
   updater.py
 if errorlevel 1 exit /b %errorlevel%
 

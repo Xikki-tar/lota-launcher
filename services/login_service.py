@@ -10,6 +10,17 @@ from auth.auth_storage import (
 )
 
 
+TELEGRAM_REGISTER_BOT = "LotaManagerBot"
+OLD_TELEGRAM_REGISTER_BOTS = ("LotaTest_bot",)
+
+
+def normalize_telegram_register_url(url: str) -> str:
+    normalized = str(url or "").strip()
+    for old_bot in OLD_TELEGRAM_REGISTER_BOTS:
+        normalized = normalized.replace(old_bot, TELEGRAM_REGISTER_BOT)
+    return normalized
+
+
 class ApiRequestWorker(QThread):
     done = Signal(object)
 
@@ -54,10 +65,13 @@ class LoginService:
         save_auth_data(token, username, status, sub_level, player_uuid)
 
     def persist_register_link(self, link_token: str, telegram_url: str) -> None:
-        save_register_data(link_token, telegram_url)
+        save_register_data(link_token, normalize_telegram_register_url(telegram_url))
 
     def load_saved_register_link(self) -> dict | None:
-        return load_register_data()
+        data = load_register_data()
+        if data and data.get("telegram_url"):
+            data["telegram_url"] = normalize_telegram_register_url(str(data.get("telegram_url") or ""))
+        return data
 
     def clear_saved_register_link(self) -> None:
         clear_register_data()
