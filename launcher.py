@@ -22,7 +22,9 @@ SKIP_UPDATER_ARG = "--skip-updater"
 
 def _runtime_dir() -> Path:
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
+        path = (get_data_dir() / "runtime").resolve()
+        path.mkdir(parents=True, exist_ok=True)
+        return path
     return Path(__file__).resolve().parent
 
 

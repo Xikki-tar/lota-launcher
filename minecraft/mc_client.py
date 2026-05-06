@@ -6,11 +6,13 @@ import os
 import platform
 import shutil
 import threading
+import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlparse
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -19,6 +21,13 @@ from auth.auth_storage import get_data_dir
 
 MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 ASSETS_BASE_URL = "https://resources.download.minecraft.net"
+LIBRARIES_BASE_URL = "https://libraries.minecraft.net"
+DEFAULT_LIBRARY_MIRRORS = [
+    "https://repo1.maven.org/maven2",
+    "https://maven.aliyun.com/repository/public",
+    "https://mirrors.cloud.tencent.com/nexus/repository/maven-public",
+    "https://repo.huaweicloud.com/repository/maven",
+]
 
 MC_VERSION = "1.20.1"
 FORGE_VERSION = "47.4.0"
@@ -27,6 +36,8 @@ FORGE_MAVEN_BASE = (
 )
 DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 REQUEST_TIMEOUT = (10, 60)
+DOWNLOAD_RETRIES = 5
+DOWNLOAD_BACKOFF_SECONDS = 0.7
 
 ProgressCallback = Callable[[int, int], None] | None
 StatusCallback = Callable[[str], None] | None
@@ -81,11 +92,62 @@ def _get_session() -> requests.Session:
     return session
 
 
+def _reset_session() -> None:
+    session = getattr(_thread_local, "session", None)
+    if session is not None:
+        try:
+            session.close()
+        except Exception:
+            pass
+        _thread_local.session = None
+
+
+def _env_list(name: str) -> list[str]:
+    raw = os.environ.get(name, "")
+    return [item.strip().rstrip("/") for item in raw.replace(";", ",").split(",") if item.strip()]
+
+
+def _unique_urls(urls: list[str]) -> list[str]:
+    result = []
+    seen = set()
+    for url in urls:
+        normalized = _normalize_url(url)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+    return result
+
+
+def _library_fallback_urls(url: str) -> list[str]:
+    normalized = _normalize_url(url)
+    parsed = urlparse(normalized)
+    if parsed.netloc.lower() != urlparse(LIBRARIES_BASE_URL).netloc.lower():
+        return [normalized]
+
+    rel_path = parsed.path.lstrip("/")
+    if not rel_path:
+        return [normalized]
+    mirrors = _env_list("LL_LIBRARY_MIRRORS") + DEFAULT_LIBRARY_MIRRORS
+    return _unique_urls([normalized, *(f"{mirror}/{rel_path}" for mirror in mirrors)])
+
+
 def _download_json(url: str, dest: Path | None = None) -> dict:
     url = _normalize_url(url)
-    r = _get_session().get(url, timeout=REQUEST_TIMEOUT)
-    r.raise_for_status()
-    data = r.json()
+    last_error: Exception | None = None
+    for attempt in range(DOWNLOAD_RETRIES):
+        try:
+            r = _get_session().get(url, timeout=REQUEST_TIMEOUT)
+            r.raise_for_status()
+            data = r.json()
+            break
+        except Exception as exc:
+            last_error = exc
+            _reset_session()
+            if attempt < DOWNLOAD_RETRIES - 1:
+                time.sleep(DOWNLOAD_BACKOFF_SECONDS * (attempt + 1))
+    else:
+        raise last_error or RuntimeError(f"Download failed: {url}")
     if dest:
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -103,7 +165,7 @@ def _valid_file(path: Path, size: int | None = None, sha1: str | None = None) ->
 
 
 def _download_file(url: str, dest: Path, size: int | None = None, sha1: str | None = None) -> None:
-    url = _normalize_url(url)
+    urls = _library_fallback_urls(url)
     dest.parent.mkdir(parents=True, exist_ok=True)
     if _valid_file(dest, size, sha1):
         return
@@ -112,22 +174,26 @@ def _download_file(url: str, dest: Path, size: int | None = None, sha1: str | No
     tmp = dest.with_name(f"{dest.name}.{threading.get_ident()}.tmp")
     tmp.unlink(missing_ok=True)
     last_error: Exception | None = None
-    for _ in range(3):
-        try:
-            with _get_session().get(url, stream=True, timeout=REQUEST_TIMEOUT) as r:
-                r.raise_for_status()
-                with open(tmp, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
-                        if chunk:
-                            f.write(chunk)
-            if not _valid_file(tmp, size, sha1):
-                raise RuntimeError(f"Downloaded file validation failed: {dest.name}")
-            tmp.replace(dest)
-            return
-        except Exception as exc:
-            last_error = exc
-            tmp.unlink(missing_ok=True)
-    raise last_error or RuntimeError(f"Download failed: {url}")
+    for attempt in range(DOWNLOAD_RETRIES):
+        for candidate_url in urls:
+            try:
+                with _get_session().get(candidate_url, stream=True, timeout=REQUEST_TIMEOUT) as r:
+                    r.raise_for_status()
+                    with open(tmp, "wb") as f:
+                        for chunk in r.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
+                            if chunk:
+                                f.write(chunk)
+                if not _valid_file(tmp, size, sha1):
+                    raise RuntimeError(f"Downloaded file validation failed: {dest.name}")
+                tmp.replace(dest)
+                return
+            except Exception as exc:
+                last_error = exc
+                tmp.unlink(missing_ok=True)
+                _reset_session()
+        if attempt < DOWNLOAD_RETRIES - 1:
+            time.sleep(DOWNLOAD_BACKOFF_SECONDS * (attempt + 1))
+    raise last_error or RuntimeError(f"Download failed: {urls[0]}")
 
 
 def _download_many(

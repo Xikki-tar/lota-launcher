@@ -5,7 +5,7 @@ from PySide6.QtCore import QTimer
 from auth.auth_storage import load_auth_data
 from services.news_service import NewsService
 from services.play_service import PlayService, PlayWorker
-from window.chrome import show_app_message
+from window.chrome import ask_app_confirmation, show_app_message
 from window.i18n import t
 from window.views.home_view import HomeView, NewsCard
 
@@ -27,19 +27,14 @@ class HomeController:
         self._proc_timer = QTimer(self.view)
         self._proc_timer.setInterval(1000)
         self._proc_timer.timeout.connect(self._poll_proc)
-        self._news_refresh_timer = QTimer(self.view)
-        self._news_refresh_timer.setInterval(5 * 60 * 1000)
-        self._news_refresh_timer.timeout.connect(self.refresh_news_background)
         self._connect_signals()
         self._news_manifest = self.news_service.load_cached_manifest()
         self._render_news(self._news_manifest)
         QTimer.singleShot(0, self.refresh_news_background)
-        self._news_refresh_timer.start()
         self.refresh_profile()
 
     def shutdown(self) -> None:
         self._proc_timer.stop()
-        self._news_refresh_timer.stop()
         for worker in (self._news_worker, self._play_worker):
             if worker and worker.isRunning():
                 worker.wait()
@@ -154,8 +149,25 @@ class HomeController:
         if self._play_worker and self._play_worker.isRunning():
             return
 
+        allow_build_update = True
+        try:
+            update_state = self.play_service.get_selected_build_update_state()
+        except Exception:
+            update_state = {"needs_update": False}
+        if update_state.get("needs_update"):
+            source_item = update_state.get("source_item") or update_state.get("selected_item") or {}
+            build_name = str(source_item.get("name") or source_item.get("version") or update_state.get("selected") or "сборка")
+            build_version = str(source_item.get("version") or "").strip()
+            build_label = f"{build_name} {build_version}".strip()
+            allow_build_update = ask_app_confirmation(
+                self.main_window,
+                t("build_update_title"),
+                t("build_update_text").format(build=build_label),
+                kind="warning",
+            )
+
         self.view.set_play_preparing()
-        worker = PlayWorker()
+        worker = PlayWorker(allow_build_update=allow_build_update)
         self._play_worker = worker
         worker.status.connect(self.view.play_status.setText)
         worker.progress.connect(self.view.play_progress.setValue)

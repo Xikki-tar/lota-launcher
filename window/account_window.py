@@ -15,7 +15,7 @@ class AccountWindow(AccountView):
             main_window=main_window,
             service=self.service,
         )
-        self.controller.refresh()
+        self.controller.refresh(remote_skin=True)
 
-    def refresh(self):
-        self.controller.refresh()
+    def refresh(self, *, remote_skin: bool = False):
+        self.controller.refresh(remote_skin=remote_skin)

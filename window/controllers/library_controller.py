@@ -13,6 +13,14 @@ from window.i18n import t
 from window.views.library_view import LibraryView
 
 
+DOWNLOAD_PROGRESS_START = 27
+
+
+def _download_progress_percent(value: int) -> int:
+    value = max(0, min(100, int(value)))
+    return DOWNLOAD_PROGRESS_START + int(value * (100 - DOWNLOAD_PROGRESS_START) / 100)
+
+
 class DownloadWorker(QThread):
     progress = Signal(int)
     finished = Signal(str)
@@ -32,6 +40,7 @@ class DownloadWorker(QThread):
 
     def run(self):
         try:
+            self.progress.emit(DOWNLOAD_PROGRESS_START)
             with requests.post(
                 f"{self.base_url}/api/build/download",
                 json={"token": self.token, "build_id": self.build_id},
@@ -59,7 +68,7 @@ class DownloadWorker(QThread):
                         output.write(chunk)
                         downloaded += len(chunk)
                         if total > 0:
-                            self.progress.emit(int(downloaded * 100 / total))
+                            self.progress.emit(_download_progress_percent(int(downloaded * 100 / total)))
                 self.finished.emit(self.dest)
         except Exception as exc:
             self.failed.emit(str(exc))
@@ -78,7 +87,7 @@ class LibraryController:
         self._download_worker = None
         self._download_target = None
         self._connect_signals()
-        self.refresh()
+        self.refresh(remote=True)
 
     def shutdown(self) -> None:
         worker = self._download_worker
@@ -101,8 +110,8 @@ class LibraryController:
         self.view.edit_instance_btn.clicked.connect(self.open_edit_instance)
         self.view.download_cancel_btn.clicked.connect(self.cancel_download)
 
-    def refresh(self):
-        self._load_items()
+    def refresh(self, *, remote: bool = False):
+        self._load_items(remote=remote)
         self._populate_lists()
 
     def apply_language(self):
@@ -123,15 +132,15 @@ class LibraryController:
     def random_cached_image(self) -> str:
         return self.library_service.pick_random_cached_image()
 
-    def _load_items(self):
+    def _load_items(self, *, remote: bool = False):
         auth = load_auth_data() or {}
         token = str(auth.get("token") or "").strip()
         try:
-            catalog = self.library_service.load_catalog(token)
+            catalog = self.library_service.load_catalog(token, prefer_remote=remote)
         except Exception:
             if hasattr(self.main_window, "show_toast"):
                 self.main_window.show_toast(t("toast_no_connection"))
-            catalog = self.library_service.load_catalog("")
+            catalog = self.library_service.load_catalog("", prefer_remote=False)
         self._builds = catalog.builds
         self._dlc = catalog.dlc
         self._library_base_dir = catalog.base_dir
@@ -250,7 +259,7 @@ class LibraryController:
             self._delete_build(item)
             return
         if item.get("is_instance"):
-            source_build = {"id": item.get("_source_build_id")}
+            source_build = self._resolve_source_build(item)
             self._download_instance_build(item, source_build)
             return
         if item.get("id"):
@@ -326,9 +335,11 @@ class LibraryController:
         self.view.download_progress.hide()
         self.view.download_cancel_btn.hide()
         try:
-            self.library_service.extract_build_archive(
+            source_item = self._resolve_source_build(item) if item.get("is_instance") else item
+            self.library_service.install_or_update_build(
+                item,
                 self.library_service.build_archive_path(item),
-                self.library_service.build_install_dir(item),
+                source_item=source_item,
             )
             try:
                 os.remove(path)
@@ -339,6 +350,17 @@ class LibraryController:
         self._download_target = None
         self.refresh()
         self._refresh_action_button()
+
+    def _resolve_source_build(self, item: dict) -> dict:
+        source_build_id = item.get("_source_build_id")
+        if source_build_id is None:
+            return {}
+        for candidate in self._builds:
+            if candidate.get("is_instance"):
+                continue
+            if candidate.get("id") == source_build_id:
+                return dict(candidate)
+        return {"id": source_build_id}
 
     def _handle_download_failed(self, message: str):
         self.view.download_status.setText(t("library_download_failed").format(message=message))

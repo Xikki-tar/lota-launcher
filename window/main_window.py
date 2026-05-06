@@ -80,7 +80,7 @@ class LauncherWindow(AppWindow):
 
         self.apply_language()
         QTimer.singleShot(0, self.refresh_auth_background)
-        self._auth_refresh_timer.start()
+        QTimer.singleShot(0, self.friends_page.refresh)
 
     def _animate_to(self, widget: QWidget):
         if self.stack.currentWidget() is widget:
@@ -104,7 +104,6 @@ class LauncherWindow(AppWindow):
 
     def show_account(self):
         self.account_page.refresh()
-        self.refresh_auth_background()
         self._animate_to(self.account_page)
 
     def show_friends(self):

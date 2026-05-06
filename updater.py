@@ -14,19 +14,28 @@ from PySide6.QtGui import QFont, QFontDatabase, QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication, QLabel, QProgressBar, QVBoxLayout, QWidget
 
 from auth.api_base import get_api_base as resolve_api_base
+from auth.auth_storage import get_data_dir
 from desktop_integration import set_windows_app_user_model_id, windows_hidden_subprocess_kwargs
-from window.chrome import AppWindow, asset_path
+from window.chrome import AppWindow, ask_app_confirmation, asset_path
 from window.style import build_app_qss
 
 
 DEFAULT_CHANNEL = os.getenv("LOTA_LAUNCHER_CHANNEL", "stable").strip() or "stable"
 REQUEST_TIMEOUT = 15
 SKIP_UPDATER_ARG = "--skip-updater"
+DOWNLOAD_PROGRESS_START = 27
+
+
+def _download_progress_percent(value: int) -> int:
+    value = max(0, min(100, int(value)))
+    return DOWNLOAD_PROGRESS_START + int(value * (100 - DOWNLOAD_PROGRESS_START) / 100)
 
 
 def _runtime_dir() -> Path:
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
+        path = (get_data_dir() / "runtime").resolve()
+        path.mkdir(parents=True, exist_ok=True)
+        return path
     return Path(__file__).resolve().parent
 
 
@@ -288,11 +297,11 @@ def launch_launcher(args: list[str]) -> int:
     return 0
 
 
-class UpdaterWorker(QThread):
+class UpdateCheckWorker(QThread):
     status_changed = Signal(str)
     progress_mode_changed = Signal(bool)
     progress_changed = Signal(int)
-    finished_with_code = Signal(int)
+    checked = Signal(object)
 
     def __init__(self, launch_args: list[str], parent=None):
         super().__init__(parent)
@@ -302,39 +311,46 @@ class UpdaterWorker(QThread):
         if not launcher_exists():
             log("Launcher is missing locally; updater will still try to fetch metadata")
 
-        self.progress_mode_changed.emit(True)
-        self.progress_changed.emit(0)
+        self.progress_mode_changed.emit(False)
+        self.progress_changed.emit(5)
         self.status_changed.emit("Проверяю обновления...")
         update_info = check_for_update()
+        self.progress_changed.emit(18)
+        self.checked.emit(update_info)
 
-        if update_info and update_info.get("update_available") is True:
-            self.progress_mode_changed.emit(False)
-            self.progress_changed.emit(0)
-            self.status_changed.emit("Найдено обновление. Подготавливаю установку...")
 
-            def on_status(text: str):
-                self.status_changed.emit(text)
+class UpdateInstallWorker(QThread):
+    status_changed = Signal(str)
+    progress_mode_changed = Signal(bool)
+    progress_changed = Signal(int)
+    finished_ok = Signal(bool)
 
-            def on_progress(done: int, total: int):
-                if total <= 0:
-                    return
-                value = max(0, min(100, int(done * 100 / total)))
-                self.progress_changed.emit(value)
+    def __init__(self, update_info: dict, parent=None):
+        super().__init__(parent)
+        self.update_info = dict(update_info or {})
 
-            ok = install_update(update_info, status_callback=on_status, progress_callback=on_progress)
-            if not ok:
-                self.status_changed.emit("Не удалось обновить лаунчер. Запускаю текущую версию...")
-                self.progress_mode_changed.emit(True)
-            else:
-                self.status_changed.emit("Обновление установлено.")
-                self.progress_changed.emit(100)
+    def run(self):
+        self.progress_mode_changed.emit(False)
+        self.progress_changed.emit(DOWNLOAD_PROGRESS_START)
+        self.status_changed.emit("Найдено обновление. Подготавливаю установку...")
+
+        def on_status(text: str):
+            self.status_changed.emit(text)
+
+        def on_progress(done: int, total: int):
+            if total <= 0:
+                return
+            value = max(0, min(100, int(done * 100 / total)))
+            self.progress_changed.emit(_download_progress_percent(value))
+
+        ok = install_update(self.update_info, status_callback=on_status, progress_callback=on_progress)
+        if ok:
+            self.status_changed.emit("Обновление установлено.")
+            self.progress_changed.emit(100)
         else:
-            self.status_changed.emit("Обновлений не найдено.")
+            self.status_changed.emit("Не удалось обновить лаунчер. Запускаю текущую версию...")
             self.progress_mode_changed.emit(True)
-
-        self.status_changed.emit("Запускаю лаунчер...")
-        code = launch_launcher(self.launch_args)
-        self.finished_with_code.emit(code)
+        self.finished_ok.emit(ok)
 
 
 class UpdaterWindow(AppWindow):
@@ -380,12 +396,27 @@ class UpdaterWindow(AppWindow):
         layout.addWidget(self.meta_label)
         layout.addStretch()
 
-        self._worker = UpdaterWorker(launch_args, self)
-        self._worker.status_changed.connect(self.status_label.setText)
-        self._worker.progress_mode_changed.connect(self._set_busy_progress)
-        self._worker.progress_changed.connect(self.progress.setValue)
-        self._worker.finished_with_code.connect(self._on_finished)
-        self._worker.start()
+        self.launch_args = list(launch_args)
+        self._worker = None
+        self._start_check()
+
+    def _start_check(self) -> None:
+        worker = UpdateCheckWorker(self.launch_args, self)
+        self._worker = worker
+        worker.status_changed.connect(self.status_label.setText)
+        worker.progress_mode_changed.connect(self._set_busy_progress)
+        worker.progress_changed.connect(self.progress.setValue)
+        worker.checked.connect(self._on_checked)
+        worker.start()
+
+    def _start_install(self, update_info: dict) -> None:
+        worker = UpdateInstallWorker(update_info, self)
+        self._worker = worker
+        worker.status_changed.connect(self.status_label.setText)
+        worker.progress_mode_changed.connect(self._set_busy_progress)
+        worker.progress_changed.connect(self.progress.setValue)
+        worker.finished_ok.connect(self._on_install_finished)
+        worker.start()
 
     def _set_busy_progress(self, busy: bool) -> None:
         if busy:
@@ -393,7 +424,33 @@ class UpdaterWindow(AppWindow):
             return
         self.progress.setRange(0, 100)
 
-    def _on_finished(self, code: int) -> None:
+    def _on_checked(self, update_info: dict | None) -> None:
+        if update_info and update_info.get("update_available") is True:
+            version = str(update_info.get("version") or "").strip() or "новая версия"
+            approved = ask_app_confirmation(
+                self,
+                "Обновление лаунчера",
+                f"Доступно обновление лаунчера: {version}.\nУстановить его сейчас?",
+                kind="warning",
+            )
+            if approved:
+                self._start_install(update_info)
+                return
+            self.status_label.setText("Обновление пропущено пользователем.")
+            self.progress.setValue(100)
+            self._launch_launcher()
+            return
+
+        self.status_label.setText("Обновлений не найдено.")
+        self.progress.setValue(100)
+        self._launch_launcher()
+
+    def _on_install_finished(self, _ok: bool) -> None:
+        self._launch_launcher()
+
+    def _launch_launcher(self) -> None:
+        self.status_label.setText("Запускаю лаунчер...")
+        code = launch_launcher(self.launch_args)
         if code == 0:
             QTimer.singleShot(400, QApplication.instance().quit)
             return

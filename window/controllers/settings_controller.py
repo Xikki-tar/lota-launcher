@@ -1,4 +1,4 @@
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtWidgets import QFileDialog, QListWidgetItem
 
 from services.settings_service import SettingsService
@@ -6,11 +6,26 @@ from window.chrome import show_app_message
 from window.i18n import set_language, t
 
 
+class JavaVersionWorker(QThread):
+    done = Signal(str, str)
+
+    def __init__(self, service: SettingsService, java_path: str, parent=None):
+        super().__init__(parent)
+        self.service = service
+        self.java_path = str(java_path or "").strip()
+
+    def run(self) -> None:
+        version_text = self.service.get_java_version_text(self.java_path)
+        self.done.emit(self.java_path, version_text)
+
+
 class SettingsController:
     def __init__(self, view, main_window, service: SettingsService | None = None):
         self.view = view
         self.main_window = main_window
         self.service = service or SettingsService()
+        self._java_version_worker: JavaVersionWorker | None = None
+        self._java_version_path = ""
         self._connect_signals()
 
     def _connect_signals(self) -> None:
@@ -110,5 +125,20 @@ class SettingsController:
             self.view.set_java_version_text(t("settings_java_version"))
             return
         version_prefix = t("settings_java_version").split(":")[0]
-        version_text = self.service.get_java_version_text(java_path)
+        self._java_version_path = java_path
+        self.view.set_java_version_text(f"{version_prefix}: ...")
+        worker = JavaVersionWorker(self.service, java_path, self.view)
+        self._java_version_worker = worker
+        worker.done.connect(self._on_java_version_loaded)
+        worker.finished.connect(lambda: self._clear_java_version_worker(worker))
+        worker.start()
+
+    def _on_java_version_loaded(self, java_path: str, version_text: str) -> None:
+        if str(java_path or "").strip() != self._java_version_path:
+            return
+        version_prefix = t("settings_java_version").split(":")[0]
         self.view.set_java_version_text(f"{version_prefix}: {version_text}")
+
+    def _clear_java_version_worker(self, worker: JavaVersionWorker) -> None:
+        if self._java_version_worker is worker:
+            self._java_version_worker = None

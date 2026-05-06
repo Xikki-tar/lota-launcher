@@ -39,7 +39,12 @@ class AccountController:
         self.view.btn_change_skin.clicked.connect(self.on_change_skin)
         self.view.btn_link_discord.clicked.connect(self.on_link_discord)
 
-    def refresh(self) -> None:
+    def refresh(self, *, remote_skin: bool = False) -> None:
+        self._render_cached_profile()
+        if remote_skin:
+            self._refresh_skin_from_server()
+
+    def _render_cached_profile(self) -> None:
         profile = self.service.load_profile()
         self.view.set_profile(
             username=str(profile.get("username") or "—"),
@@ -48,7 +53,6 @@ class AccountController:
             is_active=bool(profile.get("is_active")),
         )
         self.view.set_skin_path(str(self.service.skin_file()))
-        self._refresh_skin_from_server()
 
     def on_back(self) -> None:
         self.main_window.show_home()
@@ -104,6 +108,7 @@ class AccountController:
             )
             return
         self.view.set_skin_path(str(saved_path))
+        self._render_cached_profile()
         show_app_message(self.main_window, t("account_skin"), t("account_skin_uploaded"))
 
     def _refresh_skin_from_server(self) -> None:

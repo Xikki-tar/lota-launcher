@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 APP_DIR_NAME = "lota-launcher"
-LINUX_APP_DIR_NAME = ".lota-launcher"
+LINUX_APP_DIR_NAME = ".local/share/lota-launcher"
 SETTINGS_FILE_NAME = "config.cfg"
 
 
@@ -125,6 +125,7 @@ def _legacy_app_candidates(home: Path, system: str) -> list[Path]:
         xdg_data_home = Path(os.getenv("XDG_DATA_HOME", home / ".local" / "share"))
         candidates.extend(
             [
+                home / ".lota-launcher",
                 xdg_data_home / "lota-launcher",
                 xdg_data_home / "lota_launcher",
                 xdg_data_home / "LotaLauncher",

@@ -17,7 +17,7 @@ class FriendsController:
         self._action_worker = None
         self._latest_payload = {"friends": [], "incoming": [], "outgoing": []}
         self._poll_timer = QTimer(self.view)
-        self._poll_timer.setInterval(7000)
+        self._poll_timer.setInterval(5000)
         self._poll_timer.timeout.connect(self.refresh)
         self._connect_signals()
 
@@ -55,7 +55,6 @@ class FriendsController:
                 worker.wait()
 
     def on_back(self) -> None:
-        self._poll_timer.stop()
         self.main_window.show_home()
 
     def open_add_dialog(self) -> None:
@@ -110,7 +109,7 @@ class FriendsController:
             self.view.set_action_status(self._map_error(payload))
             return
 
-        data = self._extract_data(payload)
+        data = self._extract_result(payload)
         self._latest_payload = {
             "friends": self._normalize_items(data.get("friends")),
             "incoming": self._normalize_items(data.get("incoming")),
@@ -165,14 +164,20 @@ class FriendsController:
     def _normalize_items(self, value) -> list[dict]:
         return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
 
-    def _extract_data(self, payload: dict) -> dict:
+    def _extract_body(self, payload: dict) -> dict:
         data = payload.get("data")
-        if isinstance(data, dict) and isinstance(data.get("data"), dict):
-            return data.get("data") or {}
         return data if isinstance(data, dict) else {}
 
+    def _extract_result(self, payload: dict) -> dict:
+        data = self._extract_body(payload)
+        if isinstance(data.get("result"), dict):
+            return data.get("result") or {}
+        if isinstance(data.get("data"), dict):
+            return data.get("data") or {}
+        return data
+
     def _is_response_ok(self, payload: dict) -> bool:
-        data = payload.get("data")
+        data = self._extract_body(payload)
         if isinstance(data, dict) and data.get("ok") is False:
             return False
         nested = data.get("data") if isinstance(data, dict) else None
@@ -181,7 +186,7 @@ class FriendsController:
         return True
 
     def _map_error(self, payload: dict) -> str:
-        data = self._extract_data(payload)
+        data = self._extract_body(payload)
         error = str(data.get("error") or payload.get("error") or "").strip().lower()
         return {
             "no_token": t("error_auth"),

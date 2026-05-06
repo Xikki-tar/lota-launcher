@@ -26,6 +26,14 @@ from desktop_integration import windows_hidden_subprocess_kwargs
 from window.i18n import t
 
 
+DOWNLOAD_PROGRESS_START = 27
+
+
+def _download_progress_percent(value: int) -> int:
+    value = max(0, min(100, int(value)))
+    return DOWNLOAD_PROGRESS_START + int(value * (100 - DOWNLOAD_PROGRESS_START) / 100)
+
+
 def _is_executable(path: str) -> bool:
     if os.path.isfile(path) and os.access(path, os.X_OK):
         return True
@@ -171,11 +179,34 @@ class PlayWorker(QThread):
     ready = Signal(object)
     failed = Signal(str)
 
+    def __init__(self, *, allow_build_update: bool = True, parent=None):
+        super().__init__(parent)
+        self.allow_build_update = allow_build_update
+
     def run(self):
         try:
             play_service = PlayService()
-            play_service.ensure_latest_build_selected(status=self.status.emit, progress=self.progress.emit)
-            java_path = play_service.ensure_oracle_java_21(status=self.status.emit, progress=self.progress.emit)
+            progress_state = {"value": 0}
+
+            def emit_progress(value: int) -> None:
+                value = max(0, min(100, int(value)))
+                if value < progress_state["value"]:
+                    value = progress_state["value"]
+                progress_state["value"] = value
+                self.progress.emit(value)
+
+            emit_progress(5)
+
+            def on_download_progress(value: int) -> None:
+                emit_progress(_download_progress_percent(value))
+
+            emit_progress(DOWNLOAD_PROGRESS_START)
+            play_service.ensure_latest_build_selected(
+                status=self.status.emit,
+                progress=on_download_progress,
+                allow_build_update=self.allow_build_update,
+            )
+            java_path = play_service.ensure_oracle_java_21(status=self.status.emit, progress=on_download_progress)
 
             settings = load_settings()
             if not java_path:
@@ -219,10 +250,11 @@ class PlayWorker(QThread):
             def on_progress(done: int, total: int):
                 if total <= 0:
                     return
-                self.progress.emit(max(0, min(100, int(done * 100 / total))))
+                on_download_progress(max(0, min(100, int(done * 100 / total))))
 
             game_dir = _pick_build_dir() or _shared_game_dir()
             version_id = ensure_forge_version(_shared_versions_dir(), java_path, _shared_game_dir(), status=on_status)
+            emit_progress(DOWNLOAD_PROGRESS_START)
             prepared = prepare_version(version_id, progress=on_progress, status=on_status)
 
             auth = load_auth_data() or {}
@@ -276,7 +308,52 @@ class BundleState:
 
 
 class PlayService:
-    def ensure_latest_build_selected(self, status=None, progress=None) -> str | None:
+    def get_selected_build_update_state(self) -> dict:
+        library_service = LibraryService(get_data_dir(), get_api_base)
+        settings = load_settings()
+        selected = str(settings.get("selected_build") or "").strip()
+        if not selected:
+            return {"selected": "", "needs_update": False}
+
+        selected_dir = library_service.paths.builds_dir / selected
+        can_launch_current = _build_dir_has_payload(selected_dir)
+        auth = load_auth_data() or {}
+        token = str(auth.get("token") or "").strip()
+
+        try:
+            catalog = library_service.load_catalog(token, prefer_remote=False)
+        except Exception:
+            return {
+                "selected": selected,
+                "needs_update": False,
+                "can_launch_current": can_launch_current,
+            }
+
+        selected_item = next(
+            (item for item in catalog.builds if library_service.build_key(item) == selected),
+            None,
+        )
+        source_item = self._source_item_for_selected(catalog.builds, selected_item)
+        if selected_item is None:
+            return {
+                "selected": selected,
+                "needs_update": False,
+                "can_launch_current": can_launch_current,
+            }
+
+        needs_update = can_launch_current and not library_service.is_build_up_to_date(
+            selected_item,
+            source_item=source_item,
+        )
+        return {
+            "selected": selected,
+            "selected_item": selected_item,
+            "source_item": source_item,
+            "needs_update": needs_update,
+            "can_launch_current": can_launch_current,
+        }
+
+    def ensure_latest_build_selected(self, status=None, progress=None, *, allow_build_update: bool = True) -> str | None:
         library_service = LibraryService(get_data_dir(), get_api_base)
         settings = load_settings()
         selected = str(settings.get("selected_build") or "").strip()
@@ -287,27 +364,42 @@ class PlayService:
             if status:
                 status(t(key))
 
-        if selected:
-            selected_dir = library_service.paths.builds_dir / selected
-            if _build_dir_has_payload(selected_dir):
-                return selected
-            try:
-                catalog = library_service.load_catalog(token)
-                for item in catalog.builds:
-                    if library_service.build_key(item) == selected and library_service.is_build_installed(item):
-                        return selected
-            except Exception:
-                pass
-
         emit_status("play_status_build_check")
         catalog = library_service.load_catalog(token)
+
+        if selected:
+            selected_item = next(
+                (item for item in catalog.builds if library_service.build_key(item) == selected),
+                None,
+            )
+            selected_source_item = self._source_item_for_selected(catalog.builds, selected_item)
+            selected_dir = library_service.paths.builds_dir / selected
+
+            if selected_item is not None:
+                if library_service.is_build_up_to_date(selected_item, source_item=selected_source_item):
+                    return selected
+                if not allow_build_update and _build_dir_has_payload(selected_dir):
+                    return selected
+                self._download_build_for_play(
+                    library_service,
+                    selected_item,
+                    token,
+                    status=status,
+                    progress=progress,
+                    source_item=selected_source_item,
+                )
+                return selected
+
+            if _build_dir_has_payload(selected_dir):
+                return selected
+
         builds = [item for item in catalog.builds if isinstance(item, dict) and not item.get("is_instance")]
         if not builds:
             raise RuntimeError(t("play_error_build_unavailable"))
         latest = max(builds, key=self._build_latest_sort_key)
         build_key = library_service.build_key(latest)
 
-        if not library_service.is_build_installed(latest):
+        if not library_service.is_build_up_to_date(latest):
             self._download_build_for_play(library_service, latest, token, status=status, progress=progress)
 
         settings = load_settings()
@@ -332,11 +424,32 @@ class PlayService:
             str(item.get("name") or ""),
         )
 
-    def _download_build_for_play(self, library_service: LibraryService, item: dict, token: str, status=None, progress=None) -> None:
+    def _source_item_for_selected(self, builds: list[dict], item: dict | None) -> dict | None:
+        if not isinstance(item, dict):
+            return None
+        if not item.get("is_instance"):
+            return item
+        source_build_id = item.get("_source_build_id")
+        for candidate in builds:
+            if candidate.get("is_instance"):
+                continue
+            if candidate.get("id") == source_build_id:
+                return candidate
+        return None
+
+    def _download_build_for_play(
+        self,
+        library_service: LibraryService,
+        item: dict,
+        token: str,
+        status=None,
+        progress=None,
+        source_item: dict | None = None,
+    ) -> None:
         if not token:
             raise RuntimeError(t("play_error_build_auth"))
         try:
-            build_id = int(item.get("id"))
+            build_id = int((source_item or item).get("id"))
         except Exception:
             raise RuntimeError(t("play_error_build_unavailable"))
 
@@ -366,7 +479,7 @@ class PlayService:
 
         if status:
             status(t("play_status_build_extract"))
-        library_service.extract_build_archive(archive_path, library_service.build_install_dir(item))
+        library_service.install_or_update_build(item, archive_path, source_item=source_item)
 
     def ensure_oracle_java_21(self, status=None, progress=None) -> str:
         current = self._oracle_java_executable()

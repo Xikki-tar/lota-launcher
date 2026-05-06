@@ -23,6 +23,12 @@ from window.style import build_app_qss
 
 DEFAULT_CHANNEL = os.getenv("LOTA_LAUNCHER_CHANNEL", "stable").strip() or "stable"
 REQUEST_TIMEOUT = 20
+DOWNLOAD_PROGRESS_START = 27
+
+
+def _download_progress_percent(value: int) -> int:
+    value = max(0, min(100, int(value)))
+    return DOWNLOAD_PROGRESS_START + int(value * (100 - DOWNLOAD_PROGRESS_START) / 100)
 
 
 def detect_platform() -> str:
@@ -240,8 +246,12 @@ def install_runtime(
         if status_callback:
             status_callback(text)
 
+    if progress_callback:
+        progress_callback(4)
     emit_status("Получаем список файлов...")
     manifest = fetch_runtime_manifest(channel)
+    if progress_callback:
+        progress_callback(14)
     artifacts = manifest.get("artifacts") if isinstance(manifest, dict) else None
     if not isinstance(artifacts, dict):
         raise RuntimeError("Runtime manifest does not contain artifacts")
@@ -262,6 +272,8 @@ def install_runtime(
         total_size += artifact_sizes[name]
 
     downloaded_by_artifact = {"updater": 0, "launcher": 0}
+    if progress_callback:
+        progress_callback(DOWNLOAD_PROGRESS_START)
 
     def emit_progress() -> None:
         if not progress_callback:
@@ -269,7 +281,7 @@ def install_runtime(
         if total_size > 0:
             done = sum(downloaded_by_artifact.values())
             pct = max(0, min(100, int(done * 100 / total_size)))
-            progress_callback(pct)
+            progress_callback(_download_progress_percent(pct))
 
     def artifact_progress(artifact_name: str):
         def _inner(done: int, _total: int) -> None:

@@ -5,6 +5,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from desktop_integration import windows_hidden_subprocess_kwargs
+
 
 def normalize_path(p: str) -> str:
     try:
@@ -18,8 +20,17 @@ def is_executable(path: str) -> bool:
 
 
 def get_java_version(java_path: str) -> str:
+    path = str(java_path or "").strip()
+    if not path or not os.path.exists(path):
+        return "unknown version"
     try:
-        p = subprocess.run([java_path, "-version"], capture_output=True, text=True, timeout=3)
+        p = subprocess.run(
+            [path, "-version"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            **windows_hidden_subprocess_kwargs(),
+        )
         out = (p.stderr or p.stdout or "").strip()
         if not out:
             return "unknown version"
