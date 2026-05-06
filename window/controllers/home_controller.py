@@ -195,6 +195,8 @@ class HomeController:
             self._mc_running = True
             self.view.set_play_running_state(True)
             self._proc_timer.start()
+            if hasattr(self.main_window, "enter_game_background_mode"):
+                self.main_window.enter_game_background_mode()
         except Exception as exc:
             self._on_play_failed(str(exc))
 
@@ -203,14 +205,18 @@ class HomeController:
             return
         self._proc_timer.stop()
         self._mc_proc = None
-        if self._mc_log_file:
-            try:
-                self._mc_log_file.close()
-            except Exception:
-                pass
-            self._mc_log_file = None
-        self.view.clear_play_feedback()
-        self._mc_running = False
-        self.view.set_play_running_state(False)
-        self.play_service.cleanup_bundle_files(self._bundle_state)
-        self._bundle_state = None
+        try:
+            if self._mc_log_file:
+                try:
+                    self._mc_log_file.close()
+                except Exception:
+                    pass
+                self._mc_log_file = None
+            self.view.clear_play_feedback()
+            self._mc_running = False
+            self.view.set_play_running_state(False)
+            self.play_service.cleanup_bundle_files(self._bundle_state)
+            self._bundle_state = None
+        finally:
+            if hasattr(self.main_window, "leave_game_background_mode"):
+                self.main_window.leave_game_background_mode()

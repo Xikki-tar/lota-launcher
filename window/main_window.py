@@ -74,6 +74,7 @@ class LauncherWindow(AppWindow):
         self._auth_refresh_worker = None
         self._closing = False
         self._close_confirmed = False
+        self._running_in_background = False
         self._auth_refresh_timer = QTimer(self)
         self._auth_refresh_timer.setInterval(5 * 60 * 1000)
         self._auth_refresh_timer.timeout.connect(self.refresh_auth_background)
@@ -118,6 +119,26 @@ class LauncherWindow(AppWindow):
         self.home_page.refresh_profile()
         self._animate_to(self.home_page)
 
+    def enter_game_background_mode(self) -> None:
+        app = QApplication.instance()
+        if app is not None:
+            app.setQuitOnLastWindowClosed(False)
+        self._running_in_background = True
+        self.hide()
+
+    def leave_game_background_mode(self) -> None:
+        self._running_in_background = False
+        app = QApplication.instance()
+        if app is not None:
+            app.setQuitOnLastWindowClosed(True)
+        if self._closing:
+            return
+        self.show()
+        if self.isMinimized():
+            self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
     def apply_language(self):
         self.setWindowTitle(t("app_title_main"))
         self.home_page.apply_language()
@@ -152,6 +173,10 @@ class LauncherWindow(AppWindow):
         clear_auth_data()
         self._closing = True
         self._close_confirmed = True
+        self._running_in_background = False
+        app = QApplication.instance()
+        if app is not None:
+            app.setQuitOnLastWindowClosed(True)
         self._auth_refresh_timer.stop()
         login_window = self._on_auth_invalid() if self._on_auth_invalid else None
         if login_window is not None:
@@ -168,6 +193,7 @@ class LauncherWindow(AppWindow):
     def on_exit_clicked(self):
         if ask_app_confirmation(self, t("exit_title"), t("exit_text")):
             self._close_confirmed = True
+            self._running_in_background = False
             QApplication.instance().quit()
 
     def closeEvent(self, event):
