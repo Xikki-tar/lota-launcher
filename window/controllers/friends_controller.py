@@ -216,6 +216,21 @@ class FriendsController:
         user = self._extract_entry_user(normalized, kind=kind)
         if user:
             normalized["user"] = user
+        if isinstance(normalized.get("user"), dict):
+            user_payload = dict(normalized.get("user") or {})
+            if int(user_payload.get("id") or 0) <= 0:
+                fallback_user_id = 0
+                if kind == "incoming":
+                    fallback_user_id = int(normalized.get("requester_user_id") or 0)
+                elif kind == "outgoing":
+                    fallback_user_id = int(normalized.get("addressee_user_id") or 0)
+                elif kind == "friends":
+                    requester_id = int(normalized.get("requester_user_id") or 0)
+                    addressee_id = int(normalized.get("addressee_user_id") or 0)
+                    fallback_user_id = requester_id or addressee_id
+                if fallback_user_id > 0:
+                    user_payload["id"] = fallback_user_id
+                    normalized["user"] = user_payload
         if "status" not in normalized and isinstance(normalized.get("friendship"), dict):
             normalized["status"] = normalized["friendship"].get("status")
         return normalized
@@ -286,5 +301,6 @@ class FriendsController:
             "request_already_sent": t("friends_error_request_sent"),
             "cannot_add_self": t("friends_error_self"),
             "self_request": t("friends_error_self"),
+            "friend_request_not_found": t("friends_error_not_found"),
             "friendship_not_found": t("friends_error_not_found"),
         }.get(error, t("error_server"))
