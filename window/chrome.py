@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -5,10 +6,30 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QTextEdit, QVBoxLayout, QWidget
 
+from auth.auth_storage import get_data_dir
+
 
 def asset_path(name: str) -> Path:
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
     return base / "assets" / name
+
+
+def launcher_version_text() -> str:
+    candidates: list[Path] = []
+    try:
+        candidates.append((get_data_dir() / "runtime" / "launcher.version").resolve())
+    except Exception:
+        pass
+    candidates.append((Path(__file__).resolve().parents[1] / "launcher.version").resolve())
+    for path in candidates:
+        try:
+            if path.exists():
+                value = path.read_text(encoding="utf-8").strip()
+                if value:
+                    return value
+        except Exception:
+            continue
+    return os.getenv("LOTA_LAUNCHER_VERSION", "").strip()
 
 
 class AppMessageDialog(QDialog):
@@ -134,6 +155,13 @@ class WindowTitleBar(QFrame):
         self.title_label.setProperty("windowTitleLabel", True)
         self.title_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         layout.addWidget(self.title_label, 0, Qt.AlignVCenter)
+
+        self.version_label = QLabel()
+        self.version_label.setProperty("windowVersionLabel", True)
+        self.version_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        version_text = launcher_version_text()
+        self.version_label.setText(f"v{version_text}" if version_text else "")
+        layout.addWidget(self.version_label, 0, Qt.AlignVCenter)
         layout.addStretch()
 
         self.min_btn = QPushButton("-")

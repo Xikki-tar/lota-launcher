@@ -35,6 +35,14 @@ QLabel[windowTitleLabel="true"] {
     letter-spacing: 0.4px;
 }
 
+QLabel[windowVersionLabel="true"] {
+    font-size: 10px;
+    font-weight: 600;
+    color: rgba(203, 183, 158, 0.58);
+    letter-spacing: 0.8px;
+    padding-left: 6px;
+}
+
 QLabel[windowLogo="true"] {
     background: transparent;
     border: none;

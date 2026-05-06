@@ -111,9 +111,9 @@ class FriendsController:
 
         data = self._extract_result(payload)
         self._latest_payload = {
-            "friends": self._normalize_items(data.get("friends")),
-            "incoming": self._normalize_items(data.get("incoming")),
-            "outgoing": self._normalize_items(data.get("outgoing")),
+            "friends": self._normalize_entries(data, kind="friends"),
+            "incoming": self._normalize_entries(data, kind="incoming"),
+            "outgoing": self._normalize_entries(data, kind="outgoing"),
         }
         self._render_list()
         self.view.set_action_status(t("friends_loaded"))
@@ -163,6 +163,94 @@ class FriendsController:
 
     def _normalize_items(self, value) -> list[dict]:
         return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+    def _normalize_entries(self, data: dict, *, kind: str) -> list[dict]:
+        raw_items = self._extract_entries(data, kind=kind)
+        return [self._normalize_entry(item, kind=kind) for item in raw_items if isinstance(item, dict)]
+
+    def _extract_entries(self, data: dict, *, kind: str) -> list[dict]:
+        direct_keys = {
+            "friends": ("friends", "items"),
+            "incoming": ("incoming", "incoming_requests", "requests_incoming", "received", "received_requests"),
+            "outgoing": ("outgoing", "outgoing_requests", "requests_outgoing", "sent", "sent_requests"),
+        }.get(kind, ())
+        for key in direct_keys:
+            value = data.get(key)
+            if isinstance(value, list):
+                return self._normalize_items(value)
+
+        requests_payload = data.get("requests")
+        if isinstance(requests_payload, dict):
+            alias_keys = {
+                "incoming": ("incoming", "received", "items"),
+                "outgoing": ("outgoing", "sent", "items"),
+            }.get(kind, ())
+            for key in alias_keys:
+                value = requests_payload.get(key)
+                if isinstance(value, list):
+                    return self._normalize_items(value)
+
+        if kind in {"incoming", "outgoing"}:
+            pool = None
+            for key in ("requests", "friend_requests", "pending_requests", "pending"):
+                value = data.get(key)
+                if isinstance(value, list):
+                    pool = value
+                    break
+            if isinstance(pool, list):
+                target_statuses = {
+                    "incoming": {"incoming", "received", "pending_incoming", "requested_to_me"},
+                    "outgoing": {"outgoing", "sent", "pending_outgoing", "requested_by_me"},
+                }[kind]
+                result = []
+                for item in self._normalize_items(pool):
+                    status = str(item.get("direction") or item.get("request_type") or item.get("type") or item.get("status") or "").strip().lower()
+                    if status in target_statuses:
+                        result.append(item)
+                return result
+
+        return []
+
+    def _normalize_entry(self, entry: dict, *, kind: str) -> dict:
+        normalized = dict(entry or {})
+        user = self._extract_entry_user(normalized, kind=kind)
+        if user:
+            normalized["user"] = user
+        if "status" not in normalized and isinstance(normalized.get("friendship"), dict):
+            normalized["status"] = normalized["friendship"].get("status")
+        return normalized
+
+    def _extract_entry_user(self, entry: dict, *, kind: str) -> dict:
+        candidates = []
+        for key in ("user", "friend", "profile", "target_user", "other_user", "member"):
+            value = entry.get(key)
+            if isinstance(value, dict):
+                candidates.append(value)
+
+        if kind == "incoming":
+            for key in ("requester", "sender", "from_user", "initiator"):
+                value = entry.get(key)
+                if isinstance(value, dict):
+                    candidates.insert(0, value)
+        elif kind == "outgoing":
+            for key in ("recipient", "receiver", "to_user", "target"):
+                value = entry.get(key)
+                if isinstance(value, dict):
+                    candidates.insert(0, value)
+
+        if kind == "friends":
+            value = entry.get("friendship")
+            if isinstance(value, dict):
+                for key in ("user", "friend"):
+                    nested = value.get(key)
+                    if isinstance(nested, dict):
+                        candidates.append(nested)
+
+        for candidate in candidates:
+            if candidate.get("id") or candidate.get("username"):
+                return dict(candidate)
+
+        return {}
 
     def _extract_body(self, payload: dict) -> dict:
         data = payload.get("data")

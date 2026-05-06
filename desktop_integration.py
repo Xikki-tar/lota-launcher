@@ -2,6 +2,7 @@ import os
 import shutil
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 from auth.auth_storage import get_data_dir
@@ -108,6 +109,9 @@ def _windows_app_dir() -> Path:
 
 
 def _windows_start_menu_dir() -> Path:
+    known = _windows_known_folder("{A4115719-D62E-491D-AA7C-E74B8BE3B067}")
+    if known is not None:
+        return known
     appdata = os.getenv("APPDATA")
     if appdata:
         return Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
@@ -115,10 +119,53 @@ def _windows_start_menu_dir() -> Path:
 
 
 def _windows_desktop_dir() -> Path:
+    known = _windows_known_folder("{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}")
+    if known is not None:
+        return known
     userprofile = os.getenv("USERPROFILE")
     if userprofile:
         return Path(userprofile) / "Desktop"
     return Path.home() / "Desktop"
+
+
+def _windows_known_folder(folder_id: str) -> Path | None:
+    if not sys.platform.startswith("win"):
+        return None
+    try:
+        import ctypes
+
+        class GUID(ctypes.Structure):
+            _fields_ = [
+                ("Data1", ctypes.c_uint32),
+                ("Data2", ctypes.c_uint16),
+                ("Data3", ctypes.c_uint16),
+                ("Data4", ctypes.c_ubyte * 8),
+            ]
+
+        guid_obj = uuid.UUID(folder_id)
+        data4 = (ctypes.c_ubyte * 8)(*guid_obj.bytes[8:])
+        guid = GUID(
+            guid_obj.time_low,
+            guid_obj.time_mid,
+            guid_obj.time_hi_version,
+            data4,
+        )
+
+        path_ptr = ctypes.c_wchar_p()
+        result = ctypes.windll.shell32.SHGetKnownFolderPath(
+            ctypes.byref(guid),
+            0,
+            None,
+            ctypes.byref(path_ptr),
+        )
+        if result != 0 or not path_ptr.value:
+            return None
+        path_value = path_ptr.value
+        ctypes.windll.ole32.CoTaskMemFree(ctypes.cast(path_ptr, ctypes.c_void_p))
+        path = Path(path_value)
+        return path
+    except Exception:
+        return None
 
 
 def _sibling_icon(icon_source: Path, suffix: str) -> Path:
@@ -137,11 +184,28 @@ def _install_windows_shortcut(executable: Path, icon_source: Path, args: list[st
         icon_target = executable
 
     arguments = " ".join(f'"{arg}"' for arg in (args or []))
-    shortcuts = [
-        _windows_desktop_dir() / f"{APP_NAME}.lnk",
-        _windows_start_menu_dir() / f"{APP_NAME}.lnk",
-        _windows_start_menu_dir() / f"{WINDOWS_SEARCH_ALIAS}.lnk",
+    start_menu_dir = _windows_start_menu_dir()
+    desktop_dir = _windows_desktop_dir()
+    alias_names = [
+        APP_NAME,
+        WINDOWS_SEARCH_ALIAS,
+        executable.stem,
+        "Lota Launcher",
+        "lota-launcher",
     ]
+    shortcuts = [
+        desktop_dir / f"{APP_NAME}.lnk",
+    ]
+    shortcuts.extend(start_menu_dir / f"{name}.lnk" for name in alias_names)
+    unique_shortcuts: list[Path] = []
+    seen: set[str] = set()
+    for shortcut in shortcuts:
+        key = str(shortcut).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_shortcuts.append(shortcut)
+    shortcuts = unique_shortcuts
     for shortcut_path in shortcuts:
         shortcut_path.parent.mkdir(parents=True, exist_ok=True)
     script_lines = [
@@ -164,7 +228,7 @@ def _install_windows_shortcut(executable: Path, icon_source: Path, args: list[st
         check=True,
         **windows_hidden_subprocess_kwargs(),
     )
-    return shortcuts[0]
+    return desktop_dir / f"{APP_NAME}.lnk"
 
 
 def _refresh_linux_desktop_cache(data_home: Path) -> None:
