@@ -198,6 +198,10 @@ def write_launcher_version(install_dir: Path, version: str) -> None:
     (install_dir / "launcher.version").write_text((version or "").strip() + "\n", encoding="utf-8")
 
 
+def write_updater_version(install_dir: Path, version: str) -> None:
+    (install_dir / "updater.version").write_text((version or "").strip() + "\n", encoding="utf-8")
+
+
 def _run_launcher_install_desktop(launcher_path: Path) -> bool:
     if platform.system() != "Linux":
         return False
@@ -311,6 +315,7 @@ def install_runtime(
 
     emit_status("Финализируем установку...")
     write_launcher_version(install_dir, str(launcher_artifact.get("version") or "0.0.0"))
+    write_updater_version(install_dir, str(updater_artifact.get("version") or "0.0.0"))
     install_launcher_shortcut(install_dir, launcher_artifact)
     if progress_callback:
         progress_callback(100)

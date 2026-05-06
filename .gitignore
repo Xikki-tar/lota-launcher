@@ -21,3 +21,4 @@ Thumbs.db
 .vscode/
 *.log
 .checklist.txt
+devtools/

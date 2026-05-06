@@ -1,6 +1,7 @@
 import hashlib
 import os
 import platform
+import shlex
 import stat
 import subprocess
 import sys
@@ -23,6 +24,7 @@ from window.style import build_app_qss
 DEFAULT_CHANNEL = os.getenv("LOTA_LAUNCHER_CHANNEL", "stable").strip() or "stable"
 REQUEST_TIMEOUT = 15
 SKIP_UPDATER_ARG = "--skip-updater"
+SKIP_SELF_UPDATE_ARG = "--skip-self-update"
 DOWNLOAD_PROGRESS_START = 27
 
 
@@ -47,6 +49,10 @@ def _launcher_binary_name() -> str:
     return "Lota-launcher.exe" if platform.system() == "Windows" else "Lota-launcher"
 
 
+def _updater_binary_name() -> str:
+    return "updater.exe" if platform.system() == "Windows" else "updater"
+
+
 def _launcher_path() -> Path:
     raw = os.getenv("LOTA_LAUNCHER_PATH", "").strip()
     if raw:
@@ -56,6 +62,12 @@ def _launcher_path() -> Path:
 
 def _launcher_source_path() -> Path:
     return (_runtime_dir() / "launcher.py").resolve()
+
+
+def _updater_path() -> Path:
+    if getattr(sys, "frozen", False):
+        return (_runtime_dir() / _updater_binary_name()).resolve()
+    return (_runtime_dir() / "updater.py").resolve()
 
 
 def _windows_pythonw_executable() -> str:
@@ -73,6 +85,10 @@ def _launcher_version_path() -> Path:
     if raw:
         return Path(raw).expanduser().resolve()
     return (_runtime_dir() / "launcher.version").resolve()
+
+
+def _updater_version_path() -> Path:
+    return (_runtime_dir() / "updater.version").resolve()
 
 
 def _launcher_backup_path() -> Path:
@@ -116,14 +132,21 @@ def launcher_exists() -> bool:
     return _launcher_path().exists() or (not getattr(sys, "frozen", False) and _launcher_source_path().exists())
 
 
-def read_local_version() -> str:
-    path = _launcher_version_path()
+def _read_version_file(path: Path, fallback_env: str) -> str:
     if path.exists():
         try:
             return path.read_text(encoding="utf-8").strip() or "0.0.0"
         except Exception as exc:
             log(f"Failed to read version file {path}: {exc}")
-    return os.getenv("LOTA_LAUNCHER_VERSION", "0.0.0").strip() or "0.0.0"
+    return os.getenv(fallback_env, "0.0.0").strip() or "0.0.0"
+
+
+def read_local_version() -> str:
+    return _read_version_file(_launcher_version_path(), "LOTA_LAUNCHER_VERSION")
+
+
+def read_local_updater_version() -> str:
+    return _read_version_file(_updater_version_path(), "LOTA_UPDATER_VERSION")
 
 
 def write_local_version(version: str) -> None:
@@ -132,8 +155,39 @@ def write_local_version(version: str) -> None:
     path.write_text((version or "").strip() + "\n", encoding="utf-8")
 
 
+def write_local_updater_version(version: str) -> None:
+    path = _updater_version_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text((version or "").strip() + "\n", encoding="utf-8")
+
+
 def get_api_base() -> str:
     return resolve_api_base()
+
+
+def fetch_runtime_manifest() -> dict | None:
+    payload = {"platform": detect_platform(), "channel": DEFAULT_CHANNEL}
+    try:
+        response = requests.post(
+            f"{get_api_base()}/api/runtime/check",
+            json=payload,
+            timeout=REQUEST_TIMEOUT,
+        )
+    except requests.RequestException as exc:
+        log(f"Runtime manifest check failed: {exc}")
+        return None
+    if response.status_code != 200:
+        log(f"Runtime manifest check returned HTTP {response.status_code}")
+        return None
+    try:
+        data = response.json()
+    except ValueError as exc:
+        log(f"Runtime manifest returned invalid JSON: {exc}")
+        return None
+    if not isinstance(data, dict) or data.get("ok") is not True:
+        log(f"Runtime manifest error: {data}")
+        return None
+    return data
 
 
 def check_for_update() -> dict | None:
@@ -176,6 +230,17 @@ def _apply_executable_bits(path: Path) -> None:
         return
     mode = path.stat().st_mode
     path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(1024 * 256)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _download_to_temp(url: str, expected_sha256: str, expected_size: int, *, progress_callback=None) -> Path:
@@ -236,6 +301,40 @@ def replace_binary(current_path: Path, new_path: Path) -> None:
             backup_path.unlink(missing_ok=True)
 
 
+def get_updater_update_info() -> dict | None:
+    if not getattr(sys, "frozen", False):
+        return None
+    manifest = fetch_runtime_manifest()
+    if not isinstance(manifest, dict):
+        return None
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, dict):
+        return None
+    updater_artifact = artifacts.get("updater")
+    if not isinstance(updater_artifact, dict):
+        return None
+
+    remote_version = str(updater_artifact.get("version") or "").strip()
+    remote_sha256 = str(updater_artifact.get("sha256") or "").strip().lower()
+    local_version = read_local_updater_version()
+    updater_path = _updater_path()
+
+    if remote_version and remote_version != "0.0.0" and local_version != "0.0.0":
+        if remote_version != local_version:
+            return updater_artifact
+        return None
+
+    if remote_sha256 and updater_path.exists():
+        try:
+            local_sha256 = _sha256_file(updater_path).lower()
+        except Exception as exc:
+            log(f"Failed to hash updater binary: {exc}")
+            return updater_artifact
+        if local_sha256 != remote_sha256:
+            return updater_artifact
+    return None
+
+
 def install_update(update_info: dict, *, status_callback=None, progress_callback=None) -> bool:
     launcher_path = _launcher_path()
     launcher_url = str(update_info.get("url") or "").strip()
@@ -271,6 +370,109 @@ def install_update(update_info: dict, *, status_callback=None, progress_callback
         return False
 
 
+def _restart_updater_args(launch_args: list[str]) -> list[str]:
+    args = [arg for arg in launch_args if arg != SKIP_SELF_UPDATE_ARG]
+    args.append(SKIP_SELF_UPDATE_ARG)
+    return args
+
+
+def _schedule_windows_self_replace(current_path: Path, temp_path: Path, relaunch_args: list[str]) -> None:
+    cmdline_args = subprocess.list2cmdline(relaunch_args)
+    restart_cmd = f'"{current_path}" {cmdline_args}'.strip()
+    script = "\n".join(
+        [
+            "@echo off",
+            "setlocal",
+            f'set "TARGET={current_path}"',
+            f'set "SOURCE={temp_path}"',
+            f'set "BACKUP={current_path.with_suffix(current_path.suffix + ".old")}"',
+            ":retry",
+            'move /Y "%TARGET%" "%BACKUP%" >nul 2>nul',
+            'if not exist "%BACKUP%" (',
+            "  timeout /t 1 /nobreak >nul",
+            "  goto retry",
+            ")",
+            'move /Y "%SOURCE%" "%TARGET%" >nul 2>nul',
+            'if errorlevel 1 (',
+            '  move /Y "%BACKUP%" "%TARGET%" >nul 2>nul',
+            "  timeout /t 1 /nobreak >nul",
+            "  goto retry",
+            ")",
+            'del /f /q "%BACKUP%" >nul 2>nul',
+            f'start "" /D "{current_path.parent}" {restart_cmd}',
+            'del /f /q "%~f0" >nul 2>nul',
+        ]
+    )
+    script_path = current_path.parent / "updater_self_replace.cmd"
+    script_path.write_text(script, encoding="utf-8")
+    subprocess.Popen(
+        ["cmd.exe", "/c", str(script_path)],
+        cwd=str(current_path.parent),
+        **windows_hidden_subprocess_kwargs(),
+    )
+
+
+def _schedule_posix_self_replace(current_path: Path, temp_path: Path, relaunch_args: list[str]) -> None:
+    quoted_args = " ".join(shlex.quote(arg) for arg in relaunch_args)
+    script = "\n".join(
+        [
+            "#!/bin/sh",
+            f'TARGET="{current_path}"',
+            f'SOURCE="{temp_path}"',
+            f'BACKUP="{current_path}.old"',
+            "while ! mv \"$TARGET\" \"$BACKUP\" 2>/dev/null; do sleep 1; done",
+            "if ! mv \"$SOURCE\" \"$TARGET\" 2>/dev/null; then",
+            "  mv \"$BACKUP\" \"$TARGET\" 2>/dev/null",
+            "  exit 1",
+            "fi",
+            "chmod +x \"$TARGET\" 2>/dev/null",
+            "rm -f \"$BACKUP\"",
+            f'exec "$TARGET" {quoted_args}',
+        ]
+    )
+    script_fd, script_name = tempfile.mkstemp(prefix="updater_self_replace_", dir=str(current_path.parent))
+    os.close(script_fd)
+    script_path = Path(script_name)
+    script_path.write_text(script, encoding="utf-8")
+    _apply_executable_bits(script_path)
+    subprocess.Popen([str(script_path)], cwd=str(current_path.parent))
+
+
+def schedule_self_update(update_info: dict, launch_args: list[str], *, status_callback=None, progress_callback=None) -> bool:
+    current_path = _updater_path()
+    if not getattr(sys, "frozen", False) or not current_path.exists():
+        return False
+
+    updater_url = str(update_info.get("url") or "").strip()
+    if not updater_url:
+        log("Updater payload does not contain a file URL")
+        return False
+    if updater_url.startswith("/"):
+        updater_url = f"{get_api_base()}{updater_url}"
+
+    version = str(update_info.get("version") or "").strip()
+    sha256 = str(update_info.get("sha256") or "").strip()
+    size = int(update_info.get("size") or 0)
+
+    try:
+        if callable(status_callback):
+            status_callback(f"Скачиваю обновление апдейтера {version or ''}".strip())
+        log(f"Downloading updater update {version or '<unknown>'} from {updater_url}")
+        temp_path = _download_to_temp(updater_url, sha256, size, progress_callback=progress_callback)
+        relaunch_args = _restart_updater_args(launch_args)
+        if platform.system() == "Windows":
+            _schedule_windows_self_replace(current_path, temp_path, relaunch_args)
+        else:
+            _schedule_posix_self_replace(current_path, temp_path, relaunch_args)
+        write_local_updater_version(version or read_local_updater_version())
+        if callable(progress_callback):
+            progress_callback(size or 1, size or 1)
+        return True
+    except Exception as exc:
+        log(f"Failed to schedule updater self-update: {exc}")
+        return False
+
+
 def launch_launcher(args: list[str]) -> int:
     launcher_path = _launcher_path()
     launch_args = [arg for arg in args if arg != SKIP_UPDATER_ARG]
@@ -303,9 +505,10 @@ class UpdateCheckWorker(QThread):
     progress_changed = Signal(int)
     checked = Signal(object)
 
-    def __init__(self, launch_args: list[str], parent=None):
+    def __init__(self, launch_args: list[str], *, skip_self_update: bool = False, parent=None):
         super().__init__(parent)
         self.launch_args = list(launch_args)
+        self.skip_self_update = skip_self_update
 
     def run(self):
         if not launcher_exists():
@@ -314,9 +517,50 @@ class UpdateCheckWorker(QThread):
         self.progress_mode_changed.emit(False)
         self.progress_changed.emit(5)
         self.status_changed.emit("Проверяю обновления...")
+        updater_update_info = None if self.skip_self_update or SKIP_SELF_UPDATE_ARG in self.launch_args else get_updater_update_info()
         update_info = check_for_update()
         self.progress_changed.emit(18)
-        self.checked.emit(update_info)
+        self.checked.emit({"launcher": update_info, "updater": updater_update_info})
+
+
+class SelfUpdateWorker(QThread):
+    status_changed = Signal(str)
+    progress_mode_changed = Signal(bool)
+    progress_changed = Signal(int)
+    scheduled = Signal(bool)
+
+    def __init__(self, update_info: dict, launch_args: list[str], parent=None):
+        super().__init__(parent)
+        self.update_info = dict(update_info or {})
+        self.launch_args = list(launch_args)
+
+    def run(self):
+        self.progress_mode_changed.emit(False)
+        self.progress_changed.emit(DOWNLOAD_PROGRESS_START)
+        self.status_changed.emit("Найдено обновление апдейтера. Подготавливаю установку...")
+
+        def on_status(text: str):
+            self.status_changed.emit(text)
+
+        def on_progress(done: int, total: int):
+            if total <= 0:
+                return
+            value = max(0, min(100, int(done * 100 / total)))
+            self.progress_changed.emit(_download_progress_percent(value))
+
+        ok = schedule_self_update(
+            self.update_info,
+            self.launch_args,
+            status_callback=on_status,
+            progress_callback=on_progress,
+        )
+        if ok:
+            self.status_changed.emit("Апдейтер обновлен. Перезапускаю апдейтер...")
+            self.progress_changed.emit(100)
+        else:
+            self.status_changed.emit("Не удалось обновить апдейтер. Продолжаю с текущей версией...")
+            self.progress_mode_changed.emit(True)
+        self.scheduled.emit(ok)
 
 
 class UpdateInstallWorker(QThread):
@@ -398,10 +642,11 @@ class UpdaterWindow(AppWindow):
 
         self.launch_args = list(launch_args)
         self._worker = None
+        self._skip_self_update_check = False
         self._start_check()
 
     def _start_check(self) -> None:
-        worker = UpdateCheckWorker(self.launch_args, self)
+        worker = UpdateCheckWorker(self.launch_args, skip_self_update=self._skip_self_update_check, parent=self)
         self._worker = worker
         worker.status_changed.connect(self.status_label.setText)
         worker.progress_mode_changed.connect(self._set_busy_progress)
@@ -418,15 +663,43 @@ class UpdaterWindow(AppWindow):
         worker.finished_ok.connect(self._on_install_finished)
         worker.start()
 
+    def _start_self_update(self, update_info: dict) -> None:
+        worker = SelfUpdateWorker(update_info, self.launch_args, self)
+        self._worker = worker
+        worker.status_changed.connect(self.status_label.setText)
+        worker.progress_mode_changed.connect(self._set_busy_progress)
+        worker.progress_changed.connect(self.progress.setValue)
+        worker.scheduled.connect(self._on_self_update_finished)
+        worker.start()
+
     def _set_busy_progress(self, busy: bool) -> None:
         if busy:
             self.progress.setRange(0, 0)
             return
         self.progress.setRange(0, 100)
 
-    def _on_checked(self, update_info: dict | None) -> None:
-        if update_info and update_info.get("update_available") is True:
-            version = str(update_info.get("version") or "").strip() or "новая версия"
+    def _on_checked(self, payload: dict | None) -> None:
+        payload = payload or {}
+        updater_update_info = payload.get("updater") if isinstance(payload, dict) else None
+        launcher_update_info = payload.get("launcher") if isinstance(payload, dict) else None
+        updater_skipped = False
+
+        if updater_update_info:
+            version = str(updater_update_info.get("version") or "").strip() or "новая версия"
+            approved = ask_app_confirmation(
+                self,
+                "Обновление апдейтера",
+                f"Доступно обновление апдейтера: {version}.\nУстановить его сейчас?",
+                kind="warning",
+            )
+            if approved:
+                self._start_self_update(updater_update_info)
+                return
+            self.status_label.setText("Обновление апдейтера пропущено пользователем.")
+            updater_skipped = True
+
+        if launcher_update_info and launcher_update_info.get("update_available") is True:
+            version = str(launcher_update_info.get("version") or "").strip() or "новая версия"
             approved = ask_app_confirmation(
                 self,
                 "Обновление лаунчера",
@@ -434,9 +707,14 @@ class UpdaterWindow(AppWindow):
                 kind="warning",
             )
             if approved:
-                self._start_install(update_info)
+                self._start_install(launcher_update_info)
                 return
-            self.status_label.setText("Обновление пропущено пользователем.")
+            self.status_label.setText("Обновление лаунчера пропущено пользователем.")
+            self.progress.setValue(100)
+            self._launch_launcher()
+            return
+
+        if updater_skipped:
             self.progress.setValue(100)
             self._launch_launcher()
             return
@@ -444,6 +722,13 @@ class UpdaterWindow(AppWindow):
         self.status_label.setText("Обновлений не найдено.")
         self.progress.setValue(100)
         self._launch_launcher()
+
+    def _on_self_update_finished(self, ok: bool) -> None:
+        if ok:
+            QTimer.singleShot(400, QApplication.instance().quit)
+            return
+        self._skip_self_update_check = True
+        self._start_check()
 
     def _on_install_finished(self, _ok: bool) -> None:
         self._launch_launcher()
