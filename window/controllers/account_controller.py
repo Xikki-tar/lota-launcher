@@ -85,7 +85,7 @@ class AccountController:
         if payload.get("status_code") != 200 or not data.get("ok"):
             error = str(data.get("error") or "").strip()
             if error == "skin_too_large":
-                message = t("account_skin_too_large").format(max_human=str(data.get("max_human") or "4 KiB"))
+                message = t("account_skin_too_large").format(max_human=str(data.get("max_human") or "16 KiB"))
             elif error == "bad_skin_dimensions":
                 message = t("account_skin_bad_dimensions")
             elif error == "bad_skin_format":

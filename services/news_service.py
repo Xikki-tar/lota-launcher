@@ -4,8 +4,8 @@ from datetime import datetime
 from pathlib import Path
 
 import requests
-from PySide6.QtCore import QThread, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QThread, Signal
+from PySide6.QtGui import QMovie, QPixmap
 
 from auth.api_base import get_api_base
 from auth.auth_storage import get_data_dir, load_auth_data
@@ -168,6 +168,15 @@ class NewsService:
             unique.append(path)
         return unique
 
+    def is_gif_path(self, rel_path: str) -> bool:
+        return str(rel_path or "").strip().lower().endswith(".gif")
+
+    def cached_media_path(self, rel_path: str) -> Path | None:
+        for cache_path in self.image_cache_candidates(rel_path):
+            if cache_path.exists():
+                return cache_path
+        return None
+
     def pixmap_from_cache(self, rel_path: str, in_memory_images: dict[str, bytes]) -> QPixmap | None:
         pixmap = QPixmap()
         data = in_memory_images.get(rel_path)
@@ -176,6 +185,31 @@ class NewsService:
         for cache_path in self.image_cache_candidates(rel_path):
             if cache_path.exists() and pixmap.load(str(cache_path)):
                 return pixmap
+        return None
+
+    def movie_from_cache(self, rel_path: str, in_memory_images: dict[str, bytes], *, parent=None) -> QMovie | None:
+        data = in_memory_images.get(rel_path)
+        if data:
+            byte_array = QByteArray(data)
+            buffer = QBuffer(parent)
+            buffer.setData(byte_array)
+            if not buffer.open(QIODevice.ReadOnly):
+                return None
+            movie = QMovie(buffer, b"gif", parent)
+            movie._news_buffer = buffer
+            movie._news_byte_array = byte_array
+            if movie.isValid():
+                return movie
+            movie.deleteLater()
+            return None
+
+        cache_path = self.cached_media_path(rel_path)
+        if cache_path is None:
+            return None
+        movie = QMovie(str(cache_path), QByteArray(), parent)
+        if movie.isValid():
+            return movie
+        movie.deleteLater()
         return None
 
     def sorted_items(self, manifest: dict | None) -> list[dict]:
@@ -240,6 +274,7 @@ class NewsService:
             "body": body,
             "details": self.localize_text(entry.get("details")) or "",
             "changes": self.localize_list(entry.get("changes")),
+            "image_rel": str(entry.get("image") or "").strip(),
             "type_key": str(entry.get("type") or "news").strip().lower(),
             "type_label": {
                 "update": t("news_type_update"),

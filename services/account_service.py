@@ -10,7 +10,7 @@ from window.i18n import t
 
 
 class AccountService:
-    MAX_SKIN_UPLOAD_BYTES = 4 * 1024
+    MAX_SKIN_UPLOAD_BYTES = 16 * 1024
 
     RANK_NAMES = {
         1: "Барон",
@@ -58,7 +58,7 @@ class AccountService:
                     "ok": False,
                     "error": "skin_too_large",
                     "max_bytes": self.MAX_SKIN_UPLOAD_BYTES,
-                    "max_human": "4 KiB",
+                    "max_human": "16 KiB",
                 },
             }
         token = self.auth_token()

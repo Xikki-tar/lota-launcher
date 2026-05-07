@@ -106,8 +106,13 @@ class HomeController:
         for entry in items[:5]:
             payload = self.news_service.format_news_card_payload(entry)
             image = None
+            movie = None
             if entry.get("image"):
-                image = self.news_service.pixmap_from_cache(str(entry.get("image")), self._news_images)
+                image_rel = str(entry.get("image"))
+                if self.news_service.is_gif_path(image_rel):
+                    movie = self.news_service.movie_from_cache(image_rel, self._news_images, parent=self.view)
+                else:
+                    image = self.news_service.pixmap_from_cache(image_rel, self._news_images)
             card = NewsCard(
                 title=payload["title"],
                 date=payload["date"],
@@ -118,6 +123,8 @@ class HomeController:
                 payload=payload,
                 image=image,
             )
+            if movie is not None:
+                card.set_movie(movie)
             self.view.news_box.addWidget(card)
 
     def _open_news_details(self, payload: dict):
@@ -125,11 +132,21 @@ class HomeController:
             return
         changes = payload.get("changes") or []
         changes_text = "\n".join([f"- {item}" for item in changes if isinstance(item, str)]) if changes else ""
+        image = None
+        movie = None
+        image_rel = str(payload.get("image_rel") or "").strip()
+        if image_rel:
+            if self.news_service.is_gif_path(image_rel):
+                movie = self.news_service.movie_from_cache(image_rel, self._news_images, parent=self.view.details_overlay)
+            else:
+                image = self.news_service.pixmap_from_cache(image_rel, self._news_images)
         self.view.details_overlay.set_content(
             title=str(payload.get("title") or "—"),
             date=str(payload.get("date") or ""),
             body=str(payload.get("details") or payload.get("body") or ""),
             changes_text=changes_text,
+            image=image,
+            movie=movie,
         )
         self.view.details_overlay.setGeometry(0, 0, self.view.width(), self.view.height())
         self.view.details_overlay.raise_()

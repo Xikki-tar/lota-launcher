@@ -1,5 +1,5 @@
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt
-from PySide6.QtGui import QColor, QPixmap
+from PySide6.QtGui import QColor, QMovie, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
@@ -82,6 +82,7 @@ class NewsCard(QFrame):
         self.image_label.setProperty("newsImage", True)
         self.image_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.image_label)
+        self._movie: QMovie | None = None
 
         btn_row = QHBoxLayout()
         btn_row.addStretch()
@@ -94,6 +95,7 @@ class NewsCard(QFrame):
         self.set_image(image)
 
     def set_image(self, image: QPixmap | None) -> None:
+        self._clear_movie()
         if image is None or image.isNull():
             self.image_label.clear()
             return
@@ -103,6 +105,31 @@ class NewsCard(QFrame):
         if target.width() < 2 or target.height() < 2:
             target = QSize(420, 180)
         self.image_label.setPixmap(image.scaled(target, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
+    def set_movie(self, movie: QMovie | None) -> None:
+        self._clear_movie()
+        if movie is None:
+            self.image_label.clear()
+            return
+        self._movie = movie
+        movie.setScaledSize(self._scaled_target())
+        self.image_label.setMovie(movie)
+        movie.start()
+
+    def _scaled_target(self) -> QSize:
+        target = self.image_label.size()
+        if target.width() < 2 or target.height() < 2:
+            target = self.image_label.sizeHint()
+        if target.width() < 2 or target.height() < 2:
+            target = QSize(420, 180)
+        return target
+
+    def _clear_movie(self) -> None:
+        if self._movie is not None:
+            self._movie.stop()
+            self.image_label.setMovie(None)
+            self._movie.deleteLater()
+            self._movie = None
 
     def _handle_open(self):
         if callable(self._on_open):
@@ -138,6 +165,13 @@ class NewsDetailOverlay(QFrame):
         self.date_label.setProperty("newsDetailDate", True)
         self.panel_layout.addWidget(self.date_label)
 
+        self.image_label = QLabel()
+        self.image_label.setProperty("newsImage", True)
+        self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label.setFixedSize(560, 240)
+        self.panel_layout.addWidget(self.image_label)
+        self._movie: QMovie | None = None
+
         self.body_label = QLabel()
         self.body_label.setProperty("newsDetailText", True)
         self.body_label.setWordWrap(True)
@@ -161,13 +195,33 @@ class NewsDetailOverlay(QFrame):
         self.panel_layout.addLayout(btn_row)
         apply_layout_overrides(self, "news_overlay")
 
-    def set_content(self, title: str, date: str, body: str, changes_text: str):
+    def set_content(self, title: str, date: str, body: str, changes_text: str, image: QPixmap | None = None, movie: QMovie | None = None):
         self.title_label.setText(title or "—")
         self.date_label.setText(date or "")
+        self._clear_movie()
+        if movie is not None:
+            self._movie = movie
+            movie.setScaledSize(self.image_label.size())
+            self.image_label.setMovie(movie)
+            self.image_label.show()
+            movie.start()
+        elif image is not None and not image.isNull():
+            self.image_label.setPixmap(image.scaled(self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            self.image_label.show()
+        else:
+            self.image_label.clear()
+            self.image_label.hide()
         self.body_label.setText(body or "")
         self.changes_title.setVisible(bool(changes_text))
         self.changes_label.setVisible(bool(changes_text))
         self.changes_label.setText(changes_text or "")
+
+    def _clear_movie(self) -> None:
+        if self._movie is not None:
+            self._movie.stop()
+            self.image_label.setMovie(None)
+            self._movie.deleteLater()
+            self._movie = None
 
     def animate_open(self):
         if self.isVisible():
