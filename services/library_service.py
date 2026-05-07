@@ -164,6 +164,12 @@ class LibraryService:
             builds = self.load_instances() + remote_catalog.builds
             return LibraryCatalog(builds=builds, dlc=remote_catalog.dlc, base_dir=remote_catalog.base_dir)
 
+        if self.paths.manifest_path.exists():
+            builds, dlc = self._load_from_manifest(self.paths.manifest_path, self.paths.cache_dir)
+            if builds or dlc:
+                builds = self.load_instances() + builds
+                return LibraryCatalog(builds=builds, dlc=dlc, base_dir=self.paths.cache_dir)
+
         local_dir = self.local_asset_dir()
         manifest_path = local_dir / "manifest.json"
         if manifest_path.exists():
@@ -261,11 +267,21 @@ class LibraryService:
     def install_or_update_build(self, target_item: dict, archive_path: Path, *, source_item: dict | None = None) -> None:
         install_dir = self.build_install_dir(target_item)
         install_dir.mkdir(parents=True, exist_ok=True)
+        existing_install = self.is_build_installed(target_item)
 
         with tempfile.TemporaryDirectory(prefix="lota-build-", dir=str(self.paths.downloads_dir)) as temp_dir_raw:
             staging_dir = Path(temp_dir_raw) / "staging"
             staging_dir.mkdir(parents=True, exist_ok=True)
             self.extract_build_archive(archive_path, staging_dir)
+
+            if not existing_install:
+                self._copy_all_build_files(staging_dir, install_dir)
+                self._write_build_meta(
+                    target_item,
+                    source_item=source_item,
+                    managed_files=sorted(self._scan_managed_files(staging_dir)),
+                )
+                return
 
             new_managed_files = self._scan_managed_files(staging_dir)
             previous_meta = self.load_build_meta(target_item)
@@ -290,6 +306,8 @@ class LibraryService:
                 dst = install_dir / rel
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(src, dst)
+
+            self._copy_missing_protected_files(staging_dir, install_dir)
 
             self._write_build_meta(
                 target_item,
@@ -321,6 +339,28 @@ class LibraryService:
                 continue
             managed.add(rel)
         return managed
+
+    def _copy_all_build_files(self, root: Path, install_dir: Path) -> None:
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(root)
+            dst = install_dir / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(path, dst)
+
+    def _copy_missing_protected_files(self, root: Path, install_dir: Path) -> None:
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(root).as_posix()
+            if not self._is_protected_rel_path(rel):
+                continue
+            dst = install_dir / rel
+            if dst.exists():
+                continue
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(path, dst)
 
     def _is_protected_rel_path(self, rel_path: str) -> bool:
         rel = str(rel_path or "").replace("\\", "/").strip().lstrip("/")
@@ -461,16 +501,20 @@ class LibraryService:
             if not isinstance(entry, dict):
                 continue
             json_path = entry.get("json")
-            if not json_path:
-                continue
-            item_path = (base_dir / str(json_path)).resolve()
-            try:
-                item = json.loads(item_path.read_text(encoding="utf-8"))
-            except Exception:
-                continue
-            if not isinstance(item, dict):
-                continue
-            row = dict(item)
+            row: dict | None = None
+            if json_path:
+                item_path = (base_dir / str(json_path)).resolve()
+                try:
+                    item = json.loads(item_path.read_text(encoding="utf-8"))
+                except Exception:
+                    item = None
+                if isinstance(item, dict):
+                    row = dict(item)
+            if row is None:
+                inline_keys = {"json", "image"}
+                row = {k: v for k, v in entry.items() if k not in inline_keys}
+                if not row:
+                    continue
             if "image" not in row and entry.get("image"):
                 row["image"] = entry.get("image")
             if entry.get("id") and "id" not in row:

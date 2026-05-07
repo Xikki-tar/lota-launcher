@@ -112,8 +112,8 @@ class NewsCard(QFrame):
             self.image_label.clear()
             return
         self._movie = movie
-        movie.setScaledSize(self._scaled_target())
-        self.image_label.setMovie(movie)
+        movie.frameChanged.connect(self._update_movie_frame)
+        self._update_movie_frame()
         movie.start()
 
     def _scaled_target(self) -> QSize:
@@ -127,9 +127,23 @@ class NewsCard(QFrame):
     def _clear_movie(self) -> None:
         if self._movie is not None:
             self._movie.stop()
-            self.image_label.setMovie(None)
+            try:
+                self._movie.frameChanged.disconnect(self._update_movie_frame)
+            except Exception:
+                pass
+            self.image_label.clear()
             self._movie.deleteLater()
             self._movie = None
+
+    def _update_movie_frame(self, *_args) -> None:
+        if self._movie is None:
+            return
+        frame = self._movie.currentPixmap()
+        if frame.isNull():
+            return
+        self.image_label.setPixmap(
+            frame.scaled(self._scaled_target(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        )
 
     def _handle_open(self):
         if callable(self._on_open):
@@ -201,8 +215,8 @@ class NewsDetailOverlay(QFrame):
         self._clear_movie()
         if movie is not None:
             self._movie = movie
-            movie.setScaledSize(self.image_label.size())
-            self.image_label.setMovie(movie)
+            movie.frameChanged.connect(self._update_movie_frame)
+            self._update_movie_frame()
             self.image_label.show()
             movie.start()
         elif image is not None and not image.isNull():
@@ -219,9 +233,23 @@ class NewsDetailOverlay(QFrame):
     def _clear_movie(self) -> None:
         if self._movie is not None:
             self._movie.stop()
-            self.image_label.setMovie(None)
+            try:
+                self._movie.frameChanged.disconnect(self._update_movie_frame)
+            except Exception:
+                pass
+            self.image_label.clear()
             self._movie.deleteLater()
             self._movie = None
+
+    def _update_movie_frame(self, *_args) -> None:
+        if self._movie is None:
+            return
+        frame = self._movie.currentPixmap()
+        if frame.isNull():
+            return
+        self.image_label.setPixmap(
+            frame.scaled(self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        )
 
     def animate_open(self):
         if self.isVisible():
