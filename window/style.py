@@ -373,6 +373,12 @@ QLabel[friendsMeta="true"] {
     color: #BFA88C;
 }
 
+QLabel[friendsDateMeta="true"] {
+    font-size: 11px;
+    color: rgba(213, 195, 171, 0.58);
+    letter-spacing: 0.4px;
+}
+
 QLabel[friendsBadge="true"],
 QLabel[friendsCountBadge="true"] {
     background-color: rgba(233, 163, 68, 0.18);

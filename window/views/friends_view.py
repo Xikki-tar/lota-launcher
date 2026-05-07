@@ -1,6 +1,7 @@
 from datetime import datetime
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QTimer, Qt
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from window.i18n import t
+from window.views.account_view import RANK_GRADIENTS, flowing_gradient
 
 
 def _clear_layout(layout) -> None:
@@ -110,6 +112,72 @@ class AddFriendDialog(QDialog):
         self.status_label.setText(text)
 
 
+RANK_TAGS = {
+    1: "Б",
+    2: "A",
+    3: "И",
+    4: "Т",
+    5: "Eld",
+    6: "Jr",
+    7: "Tm",
+    8: "Drk",
+    9: "Own",
+}
+
+
+class RankTagLabel(QLabel):
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self._colors: tuple[QColor, QColor] | None = None
+        self._phase = 0
+        self._timer = QTimer(self)
+        self._timer.setInterval(45)
+        self._timer.timeout.connect(self._tick)
+        self.setAlignment(Qt.AlignCenter)
+        self.setMinimumHeight(28)
+        self.setMinimumWidth(42)
+
+    def set_rank_level(self, sub_level: int) -> None:
+        colors = RANK_GRADIENTS.get(sub_level)
+        self._colors = tuple(QColor(color) for color in colors) if colors else None
+        if self._colors:
+            self._timer.start()
+        else:
+            self._timer.stop()
+        self.update()
+
+    def _tick(self) -> None:
+        self._phase = (self._phase + 1) % 10000
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        rect = self.rect().adjusted(0, 0, -1, -1)
+
+        if self._colors:
+            gradient = flowing_gradient(rect, self._colors, self._phase)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(gradient)
+            painter.drawRoundedRect(rect, 8, 8)
+            text_color = QColor("#111827")
+            max_luminance = max(
+                0.2126 * color.red() + 0.7152 * color.green() + 0.0722 * color.blue()
+                for color in self._colors
+            )
+            if max_luminance <= 165:
+                text_color = QColor("#FFFFFF")
+            painter.setPen(text_color)
+        else:
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(255, 255, 255, 20))
+            painter.drawRoundedRect(rect, 8, 8)
+            painter.setPen(QColor("#E5E7EB"))
+
+        painter.setFont(self.font())
+        painter.drawText(rect, Qt.AlignCenter, self.text())
+
+
 class FriendCard(QFrame):
     def __init__(self, entry: dict, *, section: str, handlers: dict[str, object], parent: QWidget | None = None):
         super().__init__(parent)
@@ -124,40 +192,23 @@ class FriendCard(QFrame):
         header = QHBoxLayout()
         header.setSpacing(10)
 
-        title_box = QVBoxLayout()
-        title_box.setSpacing(2)
+        sub_level = int(self.user.get("sub_level") or 0)
+        self.rank_tag = RankTagLabel(RANK_TAGS.get(sub_level, "—"))
+        self.rank_tag.setProperty("friendsRankTag", True)
+        self.rank_tag.set_rank_level(sub_level)
+        header.addWidget(self.rank_tag, 0, Qt.AlignTop)
 
         self.username_label = QLabel(str(self.user.get("username") or "—"))
         self.username_label.setProperty("friendsUserTitle", True)
-        title_box.addWidget(self.username_label)
-
-        status_text = str(self.user.get("status") or self.entry.get("status") or "—")
-        self.status_label = QLabel(status_text)
-        self.status_label.setProperty("friendsStatus", True)
-        title_box.addWidget(self.status_label)
-
-        header.addLayout(title_box, 1)
-
-        self.badge_label = QLabel(self._badge_text())
-        self.badge_label.setProperty("friendsBadge", True)
-        self.badge_label.setAlignment(Qt.AlignCenter)
-        header.addWidget(self.badge_label, 0, Qt.AlignTop)
+        header.addWidget(self.username_label, 1, Qt.AlignVCenter)
 
         layout.addLayout(header)
 
-        meta_lines = [
-            t("friends_meta_player_uuid").format(value=str(self.user.get("player_uuid") or "—")),
-            t("friends_meta_level").format(value=str(self.user.get("sub_level") or 0)),
-            t("friends_meta_joined").format(value=_format_dt(str(self.user.get("joined_at") or "")) or "—"),
-            t("friends_meta_created").format(value=_format_dt(str(self.entry.get("created_at") or "")) or "—"),
-        ]
-        responded_at = _format_dt(str(self.entry.get("responded_at") or ""))
-        if responded_at:
-            meta_lines.append(t("friends_meta_responded").format(value=responded_at))
-
-        self.meta_label = QLabel("\n".join(meta_lines))
-        self.meta_label.setProperty("friendsMeta", True)
-        self.meta_label.setWordWrap(True)
+        joined_at = _format_dt(str(self.user.get("joined_at") or self.entry.get("joined_at") or ""))
+        created_at = _format_dt(str(self.entry.get("created_at") or ""))
+        date_text = joined_at or created_at or "—"
+        self.meta_label = QLabel(date_text)
+        self.meta_label.setProperty("friendsDateMeta", True)
         self.meta_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         layout.addWidget(self.meta_label)
 
@@ -168,11 +219,6 @@ class FriendCard(QFrame):
             actions.addWidget(button)
             self.buttons.append(button)
         layout.addLayout(actions)
-
-    def _badge_text(self) -> str:
-        if self.user.get("status"):
-            return str(self.user.get("status"))
-        return str(self.entry.get("status") or "—")
 
     def _build_buttons(self, section: str, handlers: dict[str, object]) -> list[QPushButton]:
         result: list[QPushButton] = []
