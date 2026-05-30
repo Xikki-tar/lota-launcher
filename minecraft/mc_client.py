@@ -26,9 +26,9 @@ ASSETS_BASE_URL = "https://resources.download.minecraft.net"
 LIBRARIES_BASE_URL = "https://libraries.minecraft.net"
 DEFAULT_LIBRARY_MIRRORS = [
     "https://repo1.maven.org/maven2",
-    "https://maven.aliyun.com/repository/public",
     "https://mirrors.cloud.tencent.com/nexus/repository/maven-public",
     "https://repo.huaweicloud.com/repository/maven",
+    "https://maven.aliyun.com/repository/public",
 ]
 
 MC_VERSION = "1.20.1"
@@ -291,6 +291,14 @@ def _normalize_url(url: str) -> str:
     return url.replace("maven.minecrafteforge.net", "maven.minecraftforge.net")
 
 
+def _check_url_exists(url: str) -> bool:
+    try:
+        r = _get_session().head(_normalize_url(url), timeout=(5, 10), allow_redirects=True)
+        return r.status_code < 400
+    except Exception:
+        return False
+
+
 def _rule_allows(rule: dict) -> bool:
     if not isinstance(rule, dict):
         return True
@@ -394,21 +402,22 @@ def ensure_forge_version(versions_dir: Path, java_path: str, game_dir: Path, sta
     json_url = f"{FORGE_MAVEN_BASE}/forge-{MC_VERSION}-{FORGE_VERSION}.json"
     jar_url = f"{FORGE_MAVEN_BASE}/forge-{MC_VERSION}-{FORGE_VERSION}.jar"
 
-    try:
-        data = _download_json(json_url, json_path)
-        real_id = str(data.get("id") or version_id)
-        if real_id != version_id:
-            ver_dir = versions_dir / real_id
-            ver_dir.mkdir(parents=True, exist_ok=True)
-            json_path = ver_dir / f"{real_id}.json"
-            json_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            jar_path = ver_dir / f"{real_id}.jar"
-            version_id = real_id
+    if _check_url_exists(json_url):
+        try:
+            data = _download_json(json_url, json_path)
+            real_id = str(data.get("id") or version_id)
+            if real_id != version_id:
+                ver_dir = versions_dir / real_id
+                ver_dir.mkdir(parents=True, exist_ok=True)
+                json_path = ver_dir / f"{real_id}.json"
+                json_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                jar_path = ver_dir / f"{real_id}.jar"
+                version_id = real_id
 
-        _download_file(jar_url, jar_path, None, None)
-        return version_id
-    except Exception:
-        pass
+            _download_file(jar_url, jar_path, None, None)
+            return version_id
+        except Exception:
+            pass
 
     if status:
         status("download_forge_installer")
