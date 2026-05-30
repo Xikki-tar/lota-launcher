@@ -1,8 +1,31 @@
+import io
 import os
 import shutil
+import struct
 from pathlib import Path
 
 import requests
+
+_PNG_SIGNATURE = b'\x89PNG\r\n\x1a\n'
+_PNG_KEEP_CHUNKS = {b'IHDR', b'PLTE', b'IDAT', b'IEND', b'tRNS'}
+
+
+def _strip_png_metadata(data: bytes) -> bytes:
+    if not data.startswith(_PNG_SIGNATURE):
+        return data
+    out = bytearray(_PNG_SIGNATURE)
+    pos = 8
+    while pos + 12 <= len(data):
+        length = struct.unpack_from('>I', data, pos)[0]
+        chunk_type = data[pos + 4:pos + 8]
+        end = pos + 12 + length
+        if end > len(data):
+            break
+        if chunk_type in _PNG_KEEP_CHUNKS:
+            out += data[pos:end]
+        pos = end
+    return bytes(out)
+
 
 from auth.api_base import get_api_base
 from auth.auth_storage import get_skin_file, load_auth_data, save_skin_model
@@ -64,13 +87,13 @@ class AccountService:
         token = self.auth_token()
         if not token:
             return {"status_code": 401, "data": {"ok": False, "error": "no_token"}}
-        with path.open("rb") as file_obj:
-            response = requests.post(
-                f"{get_api_base()}/api/skins/upload",
-                data={"token": token, "model": model},
-                files={"file": ("skin.png", file_obj, "image/png")},
-                timeout=15,
-            )
+        skin_data = _strip_png_metadata(path.read_bytes())
+        response = requests.post(
+            f"{get_api_base()}/api/skins/upload",
+            data={"token": token, "model": model},
+            files={"file": ("skin.png", io.BytesIO(skin_data), "image/png")},
+            timeout=15,
+        )
         try:
             data = response.json()
         except Exception:

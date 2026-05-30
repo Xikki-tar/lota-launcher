@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$ROOT_DIR/.venv"
+PYTHON="$VENV_DIR/bin/python"
 PYINSTALLER="$VENV_DIR/bin/pyinstaller"
 APP_ICON="$ROOT_DIR/assets/logo.ico"
 
@@ -13,6 +14,14 @@ if [[ ! -x "$PYINSTALLER" ]]; then
   echo "  source .venv/bin/activate"
   echo "  python -m pip install -r requirements.txt"
   echo "  python -m pip install pyinstaller"
+  exit 1
+fi
+
+if ! "$PYTHON" -m nuitka --version >/dev/null 2>&1; then
+  echo "Nuitka not found in $VENV_DIR."
+  echo "Run:"
+  echo "  source .venv/bin/activate"
+  echo "  python -m pip install nuitka"
   exit 1
 fi
 
@@ -49,15 +58,14 @@ echo "Building updater..."
   --add-data "assets:assets" \
   updater.py
 
-echo "Building installer..."
-"$PYINSTALLER" \
-  --noconfirm \
-  --clean \
+echo "Building installer with Nuitka..."
+"$PYTHON" -m nuitka \
   --onefile \
-  --windowed \
-  --name installer \
-  --icon "$APP_ICON" \
-  --add-data "assets:assets" \
+  --enable-plugin=pyside6 \
+  --include-data-dir=assets=assets \
+  --output-filename=installer \
+  --output-dir=dist \
+  --assume-yes-for-downloads \
   installer.py
 
 echo

@@ -109,7 +109,7 @@ def _windows_app_dir() -> Path:
 
 
 def _windows_start_menu_dir() -> Path:
-    known = _windows_known_folder("{A4115719-D62E-491D-AA7C-E74B8BE3B067}")
+    known = _windows_known_folder("{A77F5D77-2E2B-44C3-A6A2-ABA601054A51}")  # FOLDERID_Programs
     if known is not None:
         return known
     appdata = os.getenv("APPDATA")
@@ -168,6 +168,48 @@ def _windows_known_folder(folder_id: str) -> Path | None:
         return None
 
 
+def _run_powershell_script(script: str) -> None:
+    creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0)
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        creationflags=creationflags,
+        check=False,
+    )
+    if result.returncode != 0:
+        stderr_text = result.stderr.decode("utf-8", errors="replace").strip()
+        stdout_text = result.stdout.decode("utf-8", errors="replace").strip()
+        details = stderr_text or stdout_text or "(no output)"
+        raise RuntimeError(f"PowerShell shortcut script failed (exit {result.returncode}): {details}")
+
+
+def _register_windows_app_paths(executable: Path) -> None:
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        import winreg
+        key_path = rf"Software\Microsoft\Windows\CurrentVersion\App Paths\{executable.name}"
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, str(executable))
+            winreg.SetValueEx(key, "Path", 0, winreg.REG_SZ, str(executable.parent))
+    except Exception:
+        pass
+
+
+def _notify_shell_path(path: Path) -> None:
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        import ctypes
+        SHCNE_UPDATEDIR = 0x00001000
+        SHCNF_PATHW = 0x0005
+        ctypes.windll.shell32.SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATHW, str(path), None)
+    except Exception:
+        pass
+
+
 def _sibling_icon(icon_source: Path, suffix: str) -> Path:
     candidate = icon_source.with_suffix(suffix)
     return candidate if candidate.exists() else icon_source
@@ -209,6 +251,7 @@ def _install_windows_shortcut(executable: Path, icon_source: Path, args: list[st
     for shortcut_path in shortcuts:
         shortcut_path.parent.mkdir(parents=True, exist_ok=True)
     script_lines = [
+        "$ErrorActionPreference = 'Stop'",
         "$shell = New-Object -ComObject WScript.Shell",
     ]
     for shortcut_path in shortcuts:
@@ -223,11 +266,10 @@ def _install_windows_shortcut(executable: Path, icon_source: Path, args: list[st
             ]
         )
     script = "\n".join(script_lines)
-    subprocess.run(
-        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-        check=True,
-        **windows_hidden_subprocess_kwargs(),
-    )
+    _run_powershell_script(script)
+    _register_windows_app_paths(executable)
+    _notify_shell_path(desktop_dir)
+    _notify_shell_path(start_menu_dir)
     return desktop_dir / f"{APP_NAME}.lnk"
 
 

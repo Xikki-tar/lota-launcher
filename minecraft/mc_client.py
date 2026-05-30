@@ -5,6 +5,7 @@ import json
 import os
 import platform
 import shutil
+import ssl
 import threading
 import time
 import zipfile
@@ -16,6 +17,7 @@ from urllib.parse import urlparse
 
 import requests
 from requests.adapters import HTTPAdapter
+from urllib3.util.ssl_ import create_urllib3_context
 
 from auth.auth_storage import get_data_dir
 
@@ -80,11 +82,27 @@ def _arch() -> str:
     return "64" if "64" in arch else "32"
 
 
+class _SSLAdapter(HTTPAdapter):
+    """HTTPAdapter с SSL-контекстом, игнорирующим неожиданный EOF (Python 3.12+)."""
+
+    def init_poolmanager(self, *args, **kwargs):
+        ctx = create_urllib3_context()
+        ctx.options |= getattr(ssl, "OP_IGNORE_UNEXPECTED_EOF", 0)
+        kwargs["ssl_context"] = ctx
+        super().init_poolmanager(*args, **kwargs)
+
+    def proxy_manager_for(self, proxy, **proxy_kwargs):
+        ctx = create_urllib3_context()
+        ctx.options |= getattr(ssl, "OP_IGNORE_UNEXPECTED_EOF", 0)
+        proxy_kwargs["ssl_context"] = ctx
+        return super().proxy_manager_for(proxy, **proxy_kwargs)
+
+
 def _get_session() -> requests.Session:
     session = getattr(_thread_local, "session", None)
     if session is None:
         session = requests.Session()
-        adapter = HTTPAdapter(pool_connections=DOWNLOAD_WORKERS, pool_maxsize=DOWNLOAD_WORKERS)
+        adapter = _SSLAdapter(pool_connections=DOWNLOAD_WORKERS, pool_maxsize=DOWNLOAD_WORKERS)
         session.mount("https://", adapter)
         session.mount("http://", adapter)
         session.headers.update({"User-Agent": "LL-Launcher/1.0"})

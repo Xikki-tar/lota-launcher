@@ -1,7 +1,7 @@
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 0, 0, 0),
-    prodvers=(1, 0, 0, 0),
+    filevers=(0, 0, 1, 0),
+    prodvers=(0, 0, 1, 0),
     mask=0x3F,
     flags=0x0,
     OS=0x40004,
@@ -15,13 +15,13 @@ VSVersionInfo(
         StringTable(
           "040904B0",
           [
-            StringStruct("CompanyName", "LotaTeam"),
+            StringStruct("CompanyName", "LOTATeam"),
             StringStruct("FileDescription", "LOTA Launcher"),
-            StringStruct("FileVersion", "1.0.0.0"),
+            StringStruct("FileVersion", "0.0.1.0"),
             StringStruct("InternalName", "Lota-launcher"),
             StringStruct("OriginalFilename", "Lota-launcher.exe"),
-            StringStruct("ProductName", "LOTA Launcher"),
-            StringStruct("ProductVersion", "1.0.0.0"),
+            StringStruct("ProductName", "LotaLauncher"),
+            StringStruct("ProductVersion", "0.0.1.0"),
           ],
         )
       ]
