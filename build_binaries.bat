@@ -10,8 +10,9 @@ set "APP_ICON=%ROOT_DIR%\assets\logo.ico"
 set "LAUNCHER_VERSION_INFO=%ROOT_DIR%\packaging\windows\launcher_version_info.txt"
 set "UPDATER_VERSION_INFO=%ROOT_DIR%\packaging\windows\updater_version_info.txt"
 
+echo [1/6] Checking Python...
 if not exist "%PYTHON%" (
-  echo Python not found in %VENV_DIR%.
+  echo ERROR: Python not found in %VENV_DIR%.
   echo Run:
   echo   cd /d "%ROOT_DIR%"
   echo   py -m venv .venv
@@ -19,44 +20,47 @@ if not exist "%PYTHON%" (
   exit /b 1
 )
 
+echo [2/6] Checking PyInstaller...
 if not exist "%PYINSTALLER%" (
-  echo PyInstaller not found in %VENV_DIR%.
+  echo ERROR: PyInstaller not found in %VENV_DIR%.
   echo Run:
   echo   .venv\Scripts\python -m pip install pyinstaller
   exit /b 1
 )
 
-"%PYTHON%" -m nuitka --version >nul 2>&1
+echo [3/6] Checking Nuitka...
+"%PYTHON%" -c "import nuitka" 2>nul
 if errorlevel 1 (
-  echo Nuitka not found in %VENV_DIR%.
+  echo ERROR: Nuitka not found in %VENV_DIR%.
   echo Run:
   echo   .venv\Scripts\python -m pip install nuitka
   exit /b 1
 )
 
+echo [4/6] Checking assets and version files...
 if not exist "%APP_ICON%" (
-  echo App icon not found: %APP_ICON%
+  echo ERROR: App icon not found: %APP_ICON%
   exit /b 1
 )
-
 if not exist "%LAUNCHER_VERSION_INFO%" (
-  echo Launcher version info not found: %LAUNCHER_VERSION_INFO%
+  echo ERROR: Launcher version info not found: %LAUNCHER_VERSION_INFO%
   exit /b 1
 )
-
 if not exist "%UPDATER_VERSION_INFO%" (
-  echo Updater version info not found: %UPDATER_VERSION_INFO%
+  echo ERROR: Updater version info not found: %UPDATER_VERSION_INFO%
   exit /b 1
 )
 
+echo [5/6] Cleaning previous build artifacts...
 cd /d "%ROOT_DIR%"
-
-echo Cleaning previous build artifacts...
 if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
 del /q *.spec 2>nul
 
-echo Building launcher...
+echo [6/6] Building binaries...
+echo.
+
+echo --- launcher (PyInstaller) ---
 "%PYINSTALLER%" ^
   --noconfirm ^
   --clean ^
@@ -69,7 +73,7 @@ echo Building launcher...
   launcher.py
 if errorlevel 1 exit /b %errorlevel%
 
-echo Building updater...
+echo --- updater (PyInstaller) ---
 "%PYINSTALLER%" ^
   --noconfirm ^
   --clean ^
@@ -82,7 +86,7 @@ echo Building updater...
   updater.py
 if errorlevel 1 exit /b %errorlevel%
 
-echo Building installer with Nuitka...
+echo --- installer (Nuitka, may take several minutes on first run) ---
 "%PYTHON%" -m nuitka ^
   --onefile ^
   --windows-console-mode=disable ^
