@@ -1,0 +1,171 @@
+.page {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.card {
+  width: 100%;
+  max-width: 360px;
+  background: linear-gradient(135deg, #1C1510 0%, #241A12 100%);
+  border: 1px solid #3A2A1A;
+  border-radius: 24px;
+  padding: 20px 22px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.title {
+  font-size: 28px;
+  font-weight: 700;
+  color: #F7E4C8;
+  letter-spacing: 0.3px;
+  margin-bottom: 2px;
+}
+
+.subtitle {
+  font-size: 14px;
+  color: #CBB79E;
+  margin-bottom: 4px;
+  line-height: 1.5;
+}
+
+.input {
+  width: 100%;
+  background: #20170F;
+  border: 1px solid #4A3523;
+  border-radius: 12px;
+  padding: 5px 8px;
+  color: #F3E7D6;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+  min-height: 21px;
+}
+
+.input:focus {
+  border-color: #F5B449;
+}
+
+.input::placeholder {
+  color: #9C8368;
+}
+
+.input:disabled {
+  opacity: 0.5;
+}
+
+.btn {
+  width: 100%;
+  padding: 6px 12px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  min-height: 27px;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btnPrimary {
+  background: linear-gradient(135deg, rgba(245, 180, 73, 0.9) 0%, rgba(224, 118, 43, 0.9) 100%);
+  color: #1A120B;
+  border: 1px solid rgba(240, 193, 107, 0.8);
+  font-weight: 800;
+}
+
+.btnPrimary:not(:disabled):hover {
+  background: linear-gradient(135deg, rgba(255, 208, 107, 0.95) 0%, rgba(240, 139, 62, 0.95) 100%);
+}
+
+.btnSecondary {
+  background: rgba(120, 120, 120, 0.55);
+  color: rgba(245, 245, 245, 0.9);
+  border: 1px solid rgba(170, 170, 170, 0.6);
+}
+
+.btnSecondary:not(:disabled):hover {
+  background: rgba(140, 140, 140, 0.7);
+}
+
+.btnRegister {
+  width: auto;
+  align-self: center;
+  padding: 4px 8px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  min-height: 20px;
+  background: rgba(120, 120, 120, 0.55);
+  color: rgba(245, 245, 245, 0.9);
+  border: 1px solid rgba(170, 170, 170, 0.6);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btnRegister:not(:disabled):hover {
+  background: rgba(140, 140, 140, 0.7);
+}
+
+.btnRegister:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.loginBtnWrap {
+  margin-top: 4px;
+}
+
+.error {
+  font-size: 12px;
+  color: #EF4444;
+  text-align: center;
+  padding-top: 6px;
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(7, 5, 3, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 100;
+  backdrop-filter: blur(3px);
+}
+
+.modal {
+  width: 100%;
+  max-width: 420px;
+  background: linear-gradient(135deg, #18110C 0%, #23170F 100%);
+  border: 1px solid #3A2A1A;
+  border-radius: 18px;
+  padding: 26px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7);
+}
+
+.modalTitle {
+  font-size: 18px;
+  font-weight: 800;
+  color: #F7E4C8;
+}
+
+.modalText {
+  font-size: 13px;
+  color: #CBB79E;
+  line-height: 1.55;
+}

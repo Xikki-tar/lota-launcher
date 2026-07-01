@@ -51,6 +51,7 @@ class LibraryPaths:
 
 class LibraryService:
     BUILD_META_FILE_NAME = ".lota_build_meta.json"
+    WINDOWS_SYSTEM_FILES = {"desktop.ini", "thumbs.db", ".ds_store"}
     PROTECTED_TOP_LEVEL_DIRS = {
         "saves",
         "config",
@@ -369,6 +370,9 @@ class LibraryService:
         top = rel.split("/", 1)[0].lower()
         if top in self.PROTECTED_TOP_LEVEL_DIRS:
             return True
+        filename = rel.rsplit("/", 1)[-1].lower()
+        if filename in self.WINDOWS_SYSTEM_FILES:
+            return True
         if "/" not in rel and rel.lower() in self.PROTECTED_TOP_LEVEL_FILES:
             return True
         if rel == self.BUILD_META_FILE_NAME:
@@ -428,7 +432,7 @@ class LibraryService:
             base_url = self._api_base_resolver()
         except Exception:
             return None
-        cached_hash = self._read_cached_hash()
+        cached_hash = self._read_cached_hash() if self.paths.manifest_path.exists() else ""
         try:
             response = requests.post(
                 f"{base_url}/api/library/check",

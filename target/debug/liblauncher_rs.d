@@ -1,0 +1,1 @@
+/home/xikki/Documents/progi/launcher/client/target/debug/liblauncher_rs.so: /home/xikki/Documents/progi/launcher/client/services/settings_service.rs /home/xikki/Documents/progi/launcher/client/src/lib.rs

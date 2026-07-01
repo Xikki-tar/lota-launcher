@@ -1,0 +1,302 @@
+.content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 22px 22px 20px;
+}
+
+.pageTitle {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  color: #F7E4C8;
+  margin-bottom: 14px;
+  flex-shrink: 0;
+}
+
+.loading { color: #CBB79E; font-size: 13px; flex-shrink: 0; }
+
+.groups {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.group {
+  background: linear-gradient(135deg, #1D1712 0%, #261C13 100%);
+  border: 1px solid #3A2A1A;
+  border-radius: 16px;
+  padding: 10px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+}
+
+.groupTitle {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.8px;
+  color: #9C8368;
+  padding: 0 4px;
+  margin-left: 6px;
+  border: none;
+}
+
+.caption {
+  font-size: 12px;
+  color: #CBB79E;
+  flex-shrink: 0;
+}
+
+.memRow {
+  display: flex;
+  gap: 12px;
+}
+
+.memField {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.spinbox {
+  width: 100%;
+  background: #20170F;
+  border: 1px solid #4A3523;
+  border-radius: 10px;
+  padding: 6px 10px;
+  color: #F3E7D6;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+  min-height: 24px;
+}
+
+.spinbox:focus { border-color: #F5B449; }
+.spinbox:disabled { opacity: 0.4; }
+.field {
+  width: 100%;
+  background: #20170F;
+  border: 1px solid #4A3523;
+  border-radius: 10px;
+  padding: 6px 10px;
+  color: #F3E7D6;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+  min-height: 24px;
+}
+
+.field:focus { border-color: #F5B449; }
+.field::placeholder { color: #7A6450; }
+.field:disabled { opacity: 0.4; }
+.select {
+  width: 100%;
+  background: #20170F;
+  border: 1px solid #4A3523;
+  border-radius: 10px;
+  padding: 6px 28px 6px 10px;
+  color: #F3E7D6;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+  min-height: 24px;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%239C8368' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+.select:focus { border-color: #F5B449; }
+.select option { background: #1C1510; color: #F3E7D6; }
+.pathBtns {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.btnSmall {
+  padding: 5px 10px;
+  background: rgba(42, 30, 22, 0.72);
+  border: 1px solid rgba(74, 53, 35, 0.65);
+  border-radius: 10px;
+  color: #F3E7D6;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  min-height: 24px;
+}
+
+.btnSmall:hover {
+  background: rgba(51, 36, 25, 0.82);
+  border-color: rgba(233, 163, 68, 0.75);
+}
+.checkRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #CBB79E;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.checkRow input[type="checkbox"] {
+  accent-color: #F5B449;
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.javaList {
+  min-height: 140px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.javaListEmpty {
+  font-size: 12px;
+  color: #7A6450;
+  align-self: center;
+  margin: auto;
+}
+
+.javaListItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s, border-color 0.12s;
+  flex-shrink: 0;
+  font-family: inherit;
+  width: 100%;
+}
+
+.javaListItem:hover {
+  background: rgba(255,255,255,0.04);
+  border-color: rgba(245, 180, 73, 0.25);
+}
+
+.javaListItemActive {
+  background: rgba(245, 180, 73, 0.12);
+  border-color: rgba(245, 180, 73, 0.5);
+}
+
+.javaItemPath {
+  font-size: 11px;
+  color: #CBB79E;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.javaItemVersion {
+  font-size: 11px;
+  color: #F5B449;
+  font-weight: 600;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.themesNote {
+  font-size: 11px;
+  color: #9C8368;
+  line-height: 1.5;
+  padding: 8px 10px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.btnThemes {
+  width: 100%;
+  padding: 6px 10px;
+  background: rgba(42, 30, 22, 0.72);
+  border: 1px solid rgba(74, 53, 35, 0.65);
+  border-radius: 12px;
+  color: #F3E7D6;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  min-height: 26px;
+  flex-shrink: 0;
+}
+
+.btnThemes:hover {
+  background: rgba(51, 36, 25, 0.82);
+  border-color: rgba(233, 163, 68, 0.75);
+}
+
+.savedMsg {
+  font-size: 12px;
+  color: #B6F3D0;
+  text-align: center;
+  padding: 5px 8px;
+  background: rgba(74, 222, 128, 0.1);
+  border: 1px solid rgba(74, 222, 128, 0.3);
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.btnSave {
+  width: 100%;
+  padding: 6px 10px;
+  background: linear-gradient(135deg, rgba(245, 180, 73, 0.9) 0%, rgba(224, 118, 43, 0.9) 100%);
+  color: #1A120B;
+  font-weight: 800;
+  font-size: 12px;
+  font-family: inherit;
+  border: 1px solid rgba(240, 193, 107, 0.8);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+  min-height: 26px;
+  flex-shrink: 0;
+}
+
+.btnSave:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(255, 208, 107, 0.95) 0%, rgba(240, 139, 62, 0.95) 100%);
+}
+
+.btnSave:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btnBack {
+  width: 100%;
+  padding: 6px 10px;
+  background: rgba(42, 30, 22, 0.72);
+  border: 1px solid rgba(74, 53, 35, 0.65);
+  border-radius: 12px;
+  color: #F3E7D6;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  min-height: 26px;
+  flex-shrink: 0;
+}
+
+.btnBack:hover {
+  background: rgba(51, 36, 25, 0.82);
+  border-color: rgba(233, 163, 68, 0.75);
+}

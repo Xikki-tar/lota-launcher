@@ -1,0 +1,109 @@
+/* QFrame[windowTitleBar="true"] — height 34, margins(8,0,6,0), spacing 4 */
+.bar {
+  display: flex;
+  align-items: stretch;
+  height: 34px;
+  padding: 0 6px 0 8px;
+  gap: 4px;
+  background: linear-gradient(to right, #18110C 0%, #20160F 50%, #241910 100%);
+  border-bottom: 1px solid #3A2A1A;
+  flex-shrink: 0;
+  user-select: none;
+  -webkit-app-region: drag;
+}
+
+/* Left side: logo + title + version, vertically centered */
+.left {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Logo container — fixed 20×34, logo offset 5px from top */
+.logoWrap {
+  width: 20px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  padding-top: 5px;
+  margin-right: 4px;
+}
+
+/* QLabel[windowLogo="true"] — 18×18 */
+.logo {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  display: block;
+}
+
+/* QLabel[windowTitleLabel="true"] */
+.title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #F5DFC0;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+  align-self: center;
+}
+
+/* QLabel[windowVersionLabel="true"] */
+.version {
+  font-size: 10px;
+  font-weight: 600;
+  color: rgba(203, 183, 158, 0.58);
+  letter-spacing: 0.8px;
+  padding-left: 6px;
+  white-space: nowrap;
+  align-self: center;
+}
+
+/* Controls wrapper — spacing 3px, items 5px from top */
+.controls {
+  display: flex;
+  align-items: flex-start;
+  padding-top: 5px;
+  gap: 3px;
+  -webkit-app-region: no-drag;
+  flex-shrink: 0;
+}
+
+/* QPushButton[windowControl="true"] — 24×18 */
+.btn {
+  width: 24px;
+  height: 18px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(233, 163, 68, 0.25);
+  border-radius: 5px;
+  color: #EAD3B5;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background 0.12s, border-color 0.12s;
+  line-height: 1;
+}
+
+.btn:hover {
+  background: rgba(233, 163, 68, 0.16);
+  border-color: rgba(233, 163, 68, 0.55);
+  color: #F3E7D6;
+}
+
+/* QPushButton[windowClose="true"] */
+.close {
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+.close:hover {
+  background: rgba(239, 68, 68, 0.22);
+  border-color: rgba(239, 68, 68, 0.65);
+  color: #F18A80;
+}

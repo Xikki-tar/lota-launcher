@@ -22,3 +22,5 @@ Thumbs.db
 *.log
 .checklist.txt
 devtools/
+.tools/
+.dev-port

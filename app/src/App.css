@@ -1,0 +1,139 @@
+/* Monocraft — Minecraft-style pixel font */
+@font-face { font-family: "Monocraft"; src: url("/fonts/Monocraft.ttf") format("truetype"); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: "Monocraft"; src: url("/fonts/Monocraft-Italic.ttf") format("truetype"); font-weight: 400; font-style: italic; font-display: block; }
+@font-face { font-family: "Monocraft"; src: url("/fonts/Monocraft-Light.ttf") format("truetype"); font-weight: 300; font-style: normal; font-display: block; }
+@font-face { font-family: "Monocraft"; src: url("/fonts/Monocraft-Light-Italic.ttf") format("truetype"); font-weight: 300; font-style: italic; font-display: block; }
+@font-face { font-family: "Monocraft"; src: url("/fonts/Monocraft-ExtraLight.ttf") format("truetype"); font-weight: 200; font-style: normal; font-display: block; }
+@font-face { font-family: "Monocraft"; src: url("/fonts/Monocraft-ExtraLight-Italic.ttf") format("truetype"); font-weight: 200; font-style: italic; font-display: block; }
+@font-face { font-family: "Monocraft"; src: url("/fonts/Monocraft-SemiBold.ttf") format("truetype"); font-weight: 600; font-style: normal; font-display: block; }
+@font-face { font-family: "Monocraft"; src: url("/fonts/Monocraft-SemiBold-Italic.ttf") format("truetype"); font-weight: 600; font-style: italic; font-display: block; }
+@font-face { font-family: "Monocraft"; src: url("/fonts/Monocraft-Bold.ttf") format("truetype"); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: "Monocraft"; src: url("/fonts/Monocraft-Bold-Italic.ttf") format("truetype"); font-weight: 700; font-style: italic; font-display: block; }
+@font-face { font-family: "Monocraft"; src: url("/fonts/Monocraft-Black.ttf") format("truetype"); font-weight: 800 900; font-style: normal; font-display: block; }
+@font-face { font-family: "Monocraft"; src: url("/fonts/Monocraft-Black-Italic.ttf") format("truetype"); font-weight: 800 900; font-style: italic; font-display: block; }
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg: #0B0A08;
+  --bg-panel-from: #1C1510;
+  --bg-panel-to: #241A12;
+  --bg-panel2-from: #17120E;
+  --bg-panel2-to: #1E1610;
+  --bg-surface: #20170F;
+  --border-panel: #3A2A1A;
+  --border-panel2: #2E2014;
+  --border: #3A2A1A;
+  --border-input: #4A3523;
+  --text: #F3E7D6;
+  --text-title: #F7E4C8;
+  --text-muted: #CBB79E;
+  --text-section: #9C8368;
+  --text-caption: #A58E75;
+  --accent: #F5B449;
+  --accent-dim: rgba(245, 180, 73, 0.18);
+  --error: rgba(239, 68, 68, 0.22);
+  --error-text: #F18A80;
+}
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Monocraft", "Minecraftia", "Trebuchet MS", "Segoe UI", sans-serif;
+  font-size: 14px;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: linear-gradient(135deg, #0B0A08 0%, #15100B 55%, #1B140E 100%);
+}
+
+.content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.splash {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 14px;
+  letter-spacing: 0.5px;
+}
+
+.innerLayout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  padding: 24px;
+  gap: 20px;
+}
+
+.innerPanel {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(135deg, #1C1510 0%, #241A12 100%);
+  border-radius: 24px;
+  border: 1px solid #3A2A1A;
+  position: relative;
+}
+
+.innerPanelScroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.innerSidebar {
+  width: 240px;
+  flex-shrink: 0;
+  min-height: 0;
+  background: linear-gradient(135deg, #17120E 0%, #1E1610 100%);
+  border-radius: 22px;
+  border: 1px solid #2E2014;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 18px 18px;
+  gap: 12px;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.12);
+  border-radius: 6px;
+  margin: 2px 0;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(245, 180, 73, 0.55);
+  border-radius: 6px;
+  border: 1px solid rgba(233, 163, 68, 0.5);
+  min-height: 24px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(245, 180, 73, 0.75);
+}
