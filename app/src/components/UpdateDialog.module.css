@@ -1,0 +1,117 @@
+@keyframes overlayIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes dialogIn  { from { opacity: 0; transform: scale(0.94) translateY(6px); }
+                       to   { opacity: 1; transform: scale(1)    translateY(0);    } }
+
+.dialogOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(7, 5, 3, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  animation: overlayIn 180ms ease both;
+}
+
+.dialog {
+  background: linear-gradient(135deg, #17120E 0%, #1E1610 100%);
+  border: 1px solid #2E2014;
+  border-radius: 18px;
+  padding: 20px;
+  width: 100%;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7);
+  animation: dialogIn 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.dialogTitle {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 1.0px;
+  text-transform: uppercase;
+  color: #9C8368;
+}
+
+.dialogText {
+  font-size: 14px;
+  color: #CBB79E;
+  line-height: 1.5;
+  white-space: pre-line;
+}
+
+.dialogBtns {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.btnDialogPrimary {
+  width: 100%;
+  padding: 8px 14px;
+  background: rgba(245, 180, 73, 0.18);
+  border: 1px solid rgba(245, 180, 73, 0.5);
+  border-radius: 12px;
+  color: #F5B449;
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+  min-height: 36px;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.btnDialogPrimary:hover {
+  background: rgba(245, 180, 73, 0.28);
+  border-color: rgba(245, 180, 73, 0.8);
+}
+
+.btnDialogClose {
+  width: 100%;
+  padding: 6px 14px;
+  background: transparent;
+  border: 1px solid rgba(74, 53, 35, 0.45);
+  border-radius: 10px;
+  color: #9C8368;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  min-height: 28px;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.btnDialogClose:hover {
+  background: rgba(42, 30, 22, 0.45);
+  border-color: rgba(233, 163, 68, 0.55);
+  color: #CBB79E;
+}
+
+.dlProgress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dlBar {
+  flex: 1;
+  height: 8px;
+  background: rgba(20, 14, 10, 0.92);
+  border: 1px solid #3A2A1A;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.dlFill {
+  height: 100%;
+  background: linear-gradient(to right, rgba(245, 180, 73, 0.95), rgba(224, 118, 43, 0.95));
+  border-radius: 6px;
+  transition: width 0.4s ease;
+}
+
+.dlText {
+  font-size: 12px;
+  color: #A58E75;
+  min-width: 32px;
+  text-align: right;
+}

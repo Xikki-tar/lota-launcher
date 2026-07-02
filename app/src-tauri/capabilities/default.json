@@ -5,6 +5,16 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "opener:default"
+    "core:app:default",
+    "opener:default",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "binaries/backend",
+          "sidecar": true
+        }
+      ]
+    }
   ]
 }

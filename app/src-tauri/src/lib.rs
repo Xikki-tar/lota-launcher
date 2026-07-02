@@ -6,6 +6,7 @@ mod store;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             commands::window::close_window,
             commands::window::minimize_window,
@@ -22,6 +23,7 @@ pub fn run() {
             commands::auth::api_register_complete,
             commands::backend::backend_start,
             commands::backend::backend_port,
+            commands::update::apply_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

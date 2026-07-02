@@ -9,8 +9,8 @@ export async function getPort(): Promise<number> {
   return _port;
 }
 
-export async function initBackend(backendPath: string): Promise<number> {
-  _port = await invoke<number>("backend_start", { backendPath });
+export async function initBackend(): Promise<number> {
+  _port = await invoke<number>("backend_start");
   return _port;
 }
 

@@ -1,7 +1,11 @@
 import sys
 import io
 import json
+import hashlib
+import os
+import platform
 import socket
+import tempfile
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -21,7 +25,7 @@ class _FakeQThread:
     def start(self): pass
     def wait(self, ms=0): return True
     def isRunning(self): return False
-
+    
 class _FakeSignal:
     def __init__(self, *args): pass
     def connect(self, *args): pass
@@ -130,15 +134,16 @@ def _new_task() -> str:
     import uuid
     task_id = str(uuid.uuid4())[:8]
     with _tasks_lock:
-        _tasks[task_id] = {"state": "running", "progress": 0, "error": None}
+        _tasks[task_id] = {"state": "running", "progress": 0, "error": None, "result": None}
     return task_id
 
 
-def _task_done(task_id: str, error: str | None = None):
+def _task_done(task_id: str, error: str | None = None, result: dict | None = None):
     with _tasks_lock:
         if task_id in _tasks:
             _tasks[task_id]["state"] = "error" if error else "done"
             _tasks[task_id]["error"] = error
+            _tasks[task_id]["result"] = result
 
 
 def _task_progress(task_id: str, progress: int):
@@ -149,6 +154,140 @@ def _task_progress(task_id: str, progress: int):
 
 def _lib() -> LibraryService:
     return LibraryService(get_data_dir(), get_api_base)
+
+
+UPDATE_CHANNEL = os.getenv("LOTA_LAUNCHER_CHANNEL", "stable").strip() or "stable"
+_MACHINE_ALIASES = {"amd64": "x86_64", "x64": "x86_64", "x86-64": "x86_64", "aarch64": "arm64"}
+
+
+def _detect_platform() -> str:
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+    machine = _MACHINE_ALIASES.get(machine, machine)
+    return f"{system}-{machine}"
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(1024 * 256)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _appimage_path() -> Path | None:
+    raw = os.environ.get("APPIMAGE", "").strip()
+    return Path(raw) if raw else None
+
+
+def _update_supported() -> bool:
+    if platform.system() == "Windows":
+        return getattr(sys, "frozen", False)
+    return _appimage_path() is not None
+
+
+def _check_launcher_update(local_version: str) -> dict | None:
+    payload = {"platform": _detect_platform(), "version": local_version, "channel": UPDATE_CHANNEL}
+    try:
+        resp = http.post(f"{get_api_base()}/api/launcher/check", json=payload, timeout=15)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+    if resp.status_code != 200:
+        return {"ok": False, "error": f"HTTP {resp.status_code}"}
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    if not isinstance(data, dict) or data.get("ok") is not True:
+        return {"ok": False, "error": str(data.get("error")) if isinstance(data, dict) else "bad_response"}
+    return data
+
+
+@app.get("/update/check")
+def update_check():
+    supported = _update_supported()
+    if not supported:
+        return jsonify({"ok": True, "supported": False, "update_available": False})
+    local_version = str(request.args.get("version") or "0.0.0")
+    data = _check_launcher_update(local_version)
+    if not data or data.get("ok") is not True:
+        return jsonify({"ok": False, "supported": True, "error": data.get("error") if data else "check_failed"})
+    data["supported"] = True
+    return jsonify(data)
+
+
+@app.post("/update/install")
+def update_install():
+    body = request.json or {}
+    url = str(body.get("url") or "").strip()
+    sha256 = str(body.get("sha256") or "").strip().lower()
+    size = int(body.get("size") or 0)
+    version = str(body.get("version") or "").strip()
+
+    if not url:
+        return jsonify({"ok": False, "error": "missing_url"}), 400
+    if url.startswith("/"):
+        url = f"{get_api_base()}{url}"
+
+    is_windows = platform.system() == "Windows"
+    appimage_path = None if is_windows else _appimage_path()
+    if not is_windows and appimage_path is None:
+        return jsonify({"ok": False, "error": "unsupported"}), 400
+
+    task_id = _new_task()
+
+    def run():
+        tmp_path: Path | None = None
+        try:
+            dest_dir = Path(tempfile.gettempdir()) if is_windows else appimage_path.parent
+            fd, tmp_name = tempfile.mkstemp(prefix="lota-update-", dir=str(dest_dir))
+            os.close(fd)
+            tmp_path = Path(tmp_name)
+
+            digest = hashlib.sha256()
+            downloaded = 0
+            with http.get(url, stream=True, timeout=120) as resp:
+                if resp.status_code != 200:
+                    raise RuntimeError(f"HTTP {resp.status_code}")
+                total = int(resp.headers.get("Content-Length") or 0) or size
+                with tmp_path.open("wb") as f:
+                    for chunk in resp.iter_content(chunk_size=1024 * 256):
+                        if not chunk:
+                            continue
+                        f.write(chunk)
+                        digest.update(chunk)
+                        downloaded += len(chunk)
+                        if total > 0:
+                            _task_progress(task_id, min(95, int(downloaded * 95 / total)))
+
+            if size and downloaded != size:
+                raise RuntimeError(f"size mismatch: expected {size}, got {downloaded}")
+            if sha256 and digest.hexdigest().lower() != sha256:
+                raise RuntimeError("sha256 mismatch")
+
+            if is_windows:
+                installer_path = Path(tempfile.gettempdir()) / "lota-launcher-update.exe"
+                os.replace(tmp_path, installer_path)
+                relaunch_path = str(installer_path)
+            else:
+                mode = tmp_path.stat().st_mode
+                os.chmod(tmp_path, mode | 0o111)
+                os.replace(tmp_path, appimage_path)
+                relaunch_path = str(appimage_path)
+            tmp_path = None
+
+            _task_progress(task_id, 100)
+            _task_done(task_id, result={"relaunch_path": relaunch_path, "version": version})
+        except Exception as exc:
+            if tmp_path is not None:
+                tmp_path.unlink(missing_ok=True)
+            _task_done(task_id, error=str(exc))
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify({"ok": True, "task_id": task_id})
 
 
 @app.get("/auth/load")
@@ -495,7 +634,7 @@ _play_lock = threading.Lock()
 @app.get("/play/state")
 def play_state():
     with _play_lock:
-        return jsonify(dict(_play_state))
+        return jsonify({k: v for k, v in _play_state.items() if k != "_proc"})
 
 
 @app.post("/play/start")
@@ -904,6 +1043,19 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
+def _install_desktop_entry_if_appimage() -> None:
+    appimage_path = os.environ.get("APPIMAGE")
+    if not appimage_path:
+        return
+    try:
+        from desktop_integration import install_desktop_entry
+
+        base = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else Path(__file__).parent
+        install_desktop_entry(Path(appimage_path), base / "assets" / "logo.png")
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
     import argparse, pathlib
     parser = argparse.ArgumentParser()
@@ -918,6 +1070,7 @@ if __name__ == "__main__":
 
     # tauri читает PORT:xxxx из stdout
     print(f"PORT:{port}", flush=True)
+    _install_desktop_entry_if_appimage()
     try:
         app.run(host="127.0.0.1", port=port, threaded=True)
     finally:
