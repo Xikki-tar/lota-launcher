@@ -9,6 +9,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
@@ -56,3 +58,9 @@ jobs:
         with:
           name: lota-launcher-appimage
           path: app/src-tauri/target/release/bundle/appimage/*.AppImage
+
+      - name: Publish to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/src-tauri/target/release/bundle/appimage/*.AppImage
