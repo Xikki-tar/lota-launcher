@@ -48,7 +48,7 @@ jobs:
           --noconfirm
           --clean
           --exclude-module PySide6
-          --add-data "assets;assets"
+          --add-data "${{ github.workspace }}\assets;assets"
           --distpath build/windows/dist
           --workpath build/windows/work
           --specpath build/windows
