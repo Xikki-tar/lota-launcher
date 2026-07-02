@@ -8,3 +8,7 @@
 
 # Backend sidecar binary, built by packaging/build-appimage.sh
 /binaries/
+
+# Generated at build time (bundle.resources), holds the app version for the
+# Windows updater to compare against
+/launcher.version

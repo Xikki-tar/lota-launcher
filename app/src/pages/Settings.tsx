@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
 import { useBackend, apiGet, apiPost, invalidateCache } from "../lib/BackendContext";
 import { useI18n } from "../lib/I18nContext";
 import type { PageContext } from "../components/Layout";
 import UpdateDialog from "../components/UpdateDialog";
-import { checkForUpdate, type UpdateCheckResult } from "../lib/update";
+import { checkForUpdate, type UpdateCheckResult, type UpdateMode } from "../lib/update";
 import styles from "./Settings.module.css";
 
 const LANGUAGES = ["Українська", "Русский", "English"];
@@ -41,19 +42,19 @@ export default function Settings() {
 
   const [appVersion, setAppVersion] = useState("");
   const [checkingUpdate, setCheckingUpdate] = useState(false);
-  const [updateSupported, setUpdateSupported] = useState(false);
+  const [updateMode, setUpdateMode] = useState<UpdateMode>(null);
   const [updateNote, setUpdateNote] = useState("");
   const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
 
   useEffect(() => { load(); }, [port]);
   useEffect(() => { getVersion().then(setAppVersion).catch(() => {}); }, []);
 
-  // тихая проверка поддержки апдейта (и заодно наличия обновления) при заходе в настройки
+  // тихая проверка режима апдейта (и заодно наличия обновления для appimage) при заходе в настройки
   useEffect(() => {
     if (!appVersion) return;
     checkForUpdate(port, appVersion).then(info => {
-      setUpdateSupported(info.supported);
-      if (info.supported && info.update_available && info.url) setUpdateInfo(info);
+      setUpdateMode(info.mode);
+      if (info.mode === "appimage" && info.update_available && info.url) setUpdateInfo(info);
     }).catch(() => {});
   }, [port, appVersion]);
 
@@ -62,13 +63,33 @@ export default function Settings() {
     setUpdateNote("");
     try {
       const info = await checkForUpdate(port, appVersion);
-      setUpdateSupported(info.supported);
-      if (!info.supported) return;
+      setUpdateMode(info.mode);
+      if (info.mode !== "appimage") return;
       if (info.update_available && info.url) {
         setUpdateInfo(info);
       } else {
         setUpdateNote(t("update_none_found", "Обновлений не найдено."));
       }
+    } catch {
+      setUpdateNote(t("error_conn_refused", "Ошибка соединения."));
+    } finally {
+      setCheckingUpdate(false);
+    }
+  }
+
+  async function handleRestartToUpdater() {
+    setCheckingUpdate(true);
+    setUpdateNote("");
+    try {
+      const play = await apiGet<{ state?: string }>(port, "/play/state", 0);
+      if (play.state === "running" || play.state === "launched") {
+        setUpdateNote(t("update_game_running", "Нельзя обновиться, пока игра запущена."));
+        return;
+      }
+      if (!window.confirm(t("update_restart_confirm", "Перезапустить лаунчер для проверки обновлений?"))) {
+        return;
+      }
+      await invoke("restart_to_updater");
     } catch {
       setUpdateNote(t("error_conn_refused", "Ошибка соединения."));
     } finally {
@@ -278,7 +299,7 @@ export default function Settings() {
                 </label>
               </fieldset>
 
-              {updateSupported && (
+              {updateMode === "appimage" && (
                 <fieldset className={styles.group}>
                   <legend className={styles.groupTitle}>{t("settings_group_updates", "Обновления")}</legend>
                   <div className={styles.caption}>
@@ -287,6 +308,21 @@ export default function Settings() {
                   {updateNote && <div className={styles.caption}>{updateNote}</div>}
                   <div className={styles.pathBtns}>
                     <button className={styles.btnSmall} onClick={handleCheckUpdate} disabled={checkingUpdate}>
+                      {checkingUpdate ? t("update_checking", "Проверяю...") : t("update_btn_check", "Проверить обновления")}
+                    </button>
+                  </div>
+                </fieldset>
+              )}
+
+              {updateMode === "external" && (
+                <fieldset className={styles.group}>
+                  <legend className={styles.groupTitle}>{t("settings_group_updates", "Обновления")}</legend>
+                  <div className={styles.caption}>
+                    {t("update_current_version", "Текущая версия:")} {appVersion || "—"}
+                  </div>
+                  {updateNote && <div className={styles.caption}>{updateNote}</div>}
+                  <div className={styles.pathBtns}>
+                    <button className={styles.btnSmall} onClick={handleRestartToUpdater} disabled={checkingUpdate}>
                       {checkingUpdate ? t("update_checking", "Проверяю...") : t("update_btn_check", "Проверить обновления")}
                     </button>
                   </div>

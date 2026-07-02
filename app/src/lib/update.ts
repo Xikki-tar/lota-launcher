@@ -1,8 +1,10 @@
 import { apiGet, apiPost } from "./BackendContext";
 
+export type UpdateMode = "appimage" | "external" | null;
+
 export interface UpdateCheckResult {
   ok: boolean;
-  supported: boolean;
+  mode: UpdateMode;
   update_available: boolean;
   version?: string;
   url?: string;

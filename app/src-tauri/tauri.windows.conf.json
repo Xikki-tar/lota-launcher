@@ -1,0 +1,16 @@
+{
+  "bundle": {
+    "externalBin": [
+      "binaries/backend",
+      "binaries/updater"
+    ],
+    "resources": {
+      "launcher.version": "launcher.version"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  }
+}

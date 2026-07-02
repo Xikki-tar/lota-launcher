@@ -183,10 +183,12 @@ def _appimage_path() -> Path | None:
     return Path(raw) if raw else None
 
 
-def _update_supported() -> bool:
+def _update_mode() -> str | None:
+    # Windows обновляется отдельным updater.exe (см. updater/src-tauri) —
+    # питон в этом вообще не участвует, апдейтер сам стучится на сервер.
     if platform.system() == "Windows":
-        return getattr(sys, "frozen", False)
-    return _appimage_path() is not None
+        return "external" if getattr(sys, "frozen", False) else None
+    return "appimage" if _appimage_path() is not None else None
 
 
 def _check_launcher_update(local_version: str) -> dict | None:
@@ -208,19 +210,23 @@ def _check_launcher_update(local_version: str) -> dict | None:
 
 @app.get("/update/check")
 def update_check():
-    supported = _update_supported()
-    if not supported:
-        return jsonify({"ok": True, "supported": False, "update_available": False})
+    mode = _update_mode()
+    if mode != "appimage":
+        return jsonify({"ok": True, "mode": mode, "update_available": False})
     local_version = str(request.args.get("version") or "0.0.0")
     data = _check_launcher_update(local_version)
     if not data or data.get("ok") is not True:
-        return jsonify({"ok": False, "supported": True, "error": data.get("error") if data else "check_failed"})
-    data["supported"] = True
+        return jsonify({"ok": False, "mode": mode, "error": data.get("error") if data else "check_failed"})
+    data["mode"] = mode
     return jsonify(data)
 
 
 @app.post("/update/install")
 def update_install():
+    # Только AppImage — на Windows апдейт полностью в updater.exe, сюда не заходит.
+    if _update_mode() != "appimage":
+        return jsonify({"ok": False, "error": "unsupported"}), 400
+
     body = request.json or {}
     url = str(body.get("url") or "").strip()
     sha256 = str(body.get("sha256") or "").strip().lower()
@@ -232,18 +238,13 @@ def update_install():
     if url.startswith("/"):
         url = f"{get_api_base()}{url}"
 
-    is_windows = platform.system() == "Windows"
-    appimage_path = None if is_windows else _appimage_path()
-    if not is_windows and appimage_path is None:
-        return jsonify({"ok": False, "error": "unsupported"}), 400
-
+    appimage_path = _appimage_path()
     task_id = _new_task()
 
     def run():
         tmp_path: Path | None = None
         try:
-            dest_dir = Path(tempfile.gettempdir()) if is_windows else appimage_path.parent
-            fd, tmp_name = tempfile.mkstemp(prefix="lota-update-", dir=str(dest_dir))
+            fd, tmp_name = tempfile.mkstemp(prefix="lota-update-", dir=str(appimage_path.parent))
             os.close(fd)
             tmp_path = Path(tmp_name)
 
@@ -268,15 +269,10 @@ def update_install():
             if sha256 and digest.hexdigest().lower() != sha256:
                 raise RuntimeError("sha256 mismatch")
 
-            if is_windows:
-                installer_path = Path(tempfile.gettempdir()) / "lota-launcher-update.exe"
-                os.replace(tmp_path, installer_path)
-                relaunch_path = str(installer_path)
-            else:
-                mode = tmp_path.stat().st_mode
-                os.chmod(tmp_path, mode | 0o111)
-                os.replace(tmp_path, appimage_path)
-                relaunch_path = str(appimage_path)
+            mode = tmp_path.stat().st_mode
+            os.chmod(tmp_path, mode | 0o111)
+            os.replace(tmp_path, appimage_path)
+            relaunch_path = str(appimage_path)
             tmp_path = None
 
             _task_progress(task_id, 100)

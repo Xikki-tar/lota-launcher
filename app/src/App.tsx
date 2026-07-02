@@ -42,7 +42,7 @@ export default function App() {
       try {
         const version = await getVersion();
         const info = await checkForUpdate(backendPort, version);
-        if (info.supported && info.update_available && info.url) setUpdateInfo(info);
+        if (info.mode === "appimage" && info.update_available && info.url) setUpdateInfo(info);
       } catch { /* ignore — silent background check */ }
     }, 3000);
     return () => clearTimeout(timer);
