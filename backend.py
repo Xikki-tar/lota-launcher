@@ -183,11 +183,25 @@ def _appimage_path() -> Path | None:
     return Path(raw) if raw else None
 
 
+def _macos_app_bundle_path() -> Path | None:
+    if platform.system() != "Darwin" or not getattr(sys, "frozen", False):
+        return None
+    # frozen backend сидит в LotaLauncher.app/Contents/MacOS/backend —
+    # поднимаемся до самого .app, без привязки к точной глубине вложенности.
+    for parent in Path(sys.executable).resolve().parents:
+        if parent.suffix == ".app":
+            return parent
+    return None
+
+
 def _update_mode() -> str | None:
     # Windows обновляется отдельным updater.exe (см. updater/src-tauri) —
     # питон в этом вообще не участвует, апдейтер сам стучится на сервер.
-    if platform.system() == "Windows":
+    system = platform.system()
+    if system == "Windows":
         return "external" if getattr(sys, "frozen", False) else None
+    if system == "Darwin":
+        return "macos-app" if _macos_app_bundle_path() is not None else None
     return "appimage" if _appimage_path() is not None else None
 
 
@@ -211,7 +225,7 @@ def _check_launcher_update(local_version: str) -> dict | None:
 @app.get("/update/check")
 def update_check():
     mode = _update_mode()
-    if mode != "appimage":
+    if mode not in ("appimage", "macos-app"):
         return jsonify({"ok": True, "mode": mode, "update_available": False})
     local_version = str(request.args.get("version") or "0.0.0")
     data = _check_launcher_update(local_version)
@@ -221,10 +235,42 @@ def update_check():
     return jsonify(data)
 
 
+def _install_macos_app_update(zip_path: Path, target_app: Path) -> str:
+    import shutil
+    import zipfile
+
+    extract_dir = target_app.parent / f".lota-update-extract-{os.getpid()}"
+    extract_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            zf.extractall(extract_dir)
+        new_app = next((p for p in extract_dir.iterdir() if p.suffix == ".app"), None)
+        if new_app is None:
+            raise RuntimeError("update archive has no .app bundle")
+
+        # Замена директории бандла целиком, пока текущий процесс из неё же
+        # исполняется — на POSIX это безопасно (открытый файл живёт по inode,
+        # не по пути), тот же принцип, что и с AppImage.
+        backup = target_app.with_name(target_app.name + ".old")
+        shutil.rmtree(backup, ignore_errors=True)
+        os.replace(target_app, backup)
+        try:
+            os.replace(new_app, target_app)
+        except Exception:
+            os.replace(backup, target_app)
+            raise
+        shutil.rmtree(backup, ignore_errors=True)
+        # apply_update() запускает конкретный бинарник, не .app-директорию
+        return str(target_app / "Contents" / "MacOS" / "lota-launcher")
+    finally:
+        shutil.rmtree(extract_dir, ignore_errors=True)
+
+
 @app.post("/update/install")
 def update_install():
-    # Только AppImage — на Windows апдейт полностью в updater.exe, сюда не заходит.
-    if _update_mode() != "appimage":
+    # На Windows апдейт полностью в updater.exe, сюда не заходит.
+    mode = _update_mode()
+    if mode not in ("appimage", "macos-app"):
         return jsonify({"ok": False, "error": "unsupported"}), 400
 
     body = request.json or {}
@@ -238,13 +284,13 @@ def update_install():
     if url.startswith("/"):
         url = f"{get_api_base()}{url}"
 
-    appimage_path = _appimage_path()
+    target_path = _appimage_path() if mode == "appimage" else _macos_app_bundle_path()
     task_id = _new_task()
 
     def run():
         tmp_path: Path | None = None
         try:
-            fd, tmp_name = tempfile.mkstemp(prefix="lota-update-", dir=str(appimage_path.parent))
+            fd, tmp_name = tempfile.mkstemp(prefix="lota-update-", dir=str(target_path.parent))
             os.close(fd)
             tmp_path = Path(tmp_name)
 
@@ -269,11 +315,16 @@ def update_install():
             if sha256 and digest.hexdigest().lower() != sha256:
                 raise RuntimeError("sha256 mismatch")
 
-            mode = tmp_path.stat().st_mode
-            os.chmod(tmp_path, mode | 0o111)
-            os.replace(tmp_path, appimage_path)
-            relaunch_path = str(appimage_path)
-            tmp_path = None
+            if mode == "appimage":
+                mode_bits = tmp_path.stat().st_mode
+                os.chmod(tmp_path, mode_bits | 0o111)
+                os.replace(tmp_path, target_path)
+                relaunch_path = str(target_path)
+                tmp_path = None
+            else:
+                relaunch_path = _install_macos_app_update(tmp_path, target_path)
+                tmp_path.unlink(missing_ok=True)
+                tmp_path = None
 
             _task_progress(task_id, 100)
             _task_done(task_id, result={"relaunch_path": relaunch_path, "version": version})

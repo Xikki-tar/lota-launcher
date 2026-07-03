@@ -14,7 +14,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import UpdateDialog from "./components/UpdateDialog";
 import { BackendProvider } from "./lib/BackendContext";
 import { I18nProvider } from "./lib/I18nContext";
-import { checkForUpdate, type UpdateCheckResult } from "./lib/update";
+import { checkForUpdate, isInAppUpdateMode, type UpdateCheckResult } from "./lib/update";
 import "./App.css";
 
 type AppState = "loading" | "login" | "main";
@@ -42,7 +42,7 @@ export default function App() {
       try {
         const version = await getVersion();
         const info = await checkForUpdate(backendPort, version);
-        if (info.mode === "appimage" && info.update_available && info.url) setUpdateInfo(info);
+        if (isInAppUpdateMode(info.mode) && info.update_available && info.url) setUpdateInfo(info);
       } catch { /* ignore — silent background check */ }
     }, 3000);
     return () => clearTimeout(timer);

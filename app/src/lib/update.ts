@@ -1,6 +1,6 @@
 import { apiGet, apiPost } from "./BackendContext";
 
-export type UpdateMode = "appimage" | "external" | null;
+export type UpdateMode = "appimage" | "macos-app" | "external" | null;
 
 export interface UpdateCheckResult {
   ok: boolean;
@@ -33,4 +33,10 @@ export function startUpdateInstall(
 
 export function pollUpdateTask(port: number | null, taskId: string) {
   return apiGet<UpdateTaskStatus>(port, `/task/${taskId}`, 0);
+}
+
+// AppImage и macOS-бандл апдейтятся одинаково — прямо внутри приложения,
+// через UpdateDialog. Только Windows (mode === "external") идёт другим путём.
+export function isInAppUpdateMode(mode: UpdateMode): boolean {
+  return mode === "appimage" || mode === "macos-app";
 }

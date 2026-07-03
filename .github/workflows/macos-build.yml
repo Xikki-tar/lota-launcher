@@ -1,0 +1,98 @@
+name: macOS Build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    # GitHub-раннер по умолчанию — Apple Silicon (arm64). Билд для Intel-маков
+    # (x86_64) пока не собираем — не на чем проверить, отдельная задача.
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build backend with PyInstaller
+        run: >
+          pyinstaller backend.py
+          --name backend
+          --onefile
+          --noconfirm
+          --clean
+          --exclude-module PySide6
+          --add-data "${{ github.workspace }}/assets:assets"
+          --distpath build/macos/dist
+          --workpath build/macos/work
+          --specpath build/macos
+
+      - name: Place backend as Tauri sidecar
+        run: |
+          mkdir -p app/src-tauri/binaries
+          target_triple="$(rustc -vV | sed -n 's/host: //p')"
+          cp build/macos/dist/backend "app/src-tauri/binaries/backend-$target_triple"
+          chmod +x "app/src-tauri/binaries/backend-$target_triple"
+
+      - name: Install frontend dependencies
+        working-directory: app
+        run: npm ci
+
+      - name: Build Tauri app
+        # Без Apple Developer сертификата — Tauri сам ставит ad-hoc подпись.
+        # Gatekeeper всё равно предупредит при первом запуске, это ожидаемо.
+        working-directory: app
+        run: npm run tauri build
+
+      - name: Zip the .app bundle
+        # Нужно и как payload для автообновления (backend.py ждёт именно
+        # zip с .app внутри), и просто как удобный скачиваемый файл.
+        run: |
+          app_path="$(find app/src-tauri/target/release/bundle/macos -maxdepth 1 -iname '*.app' | head -1)"
+          ditto -c -k --sequesterRsrc --keepParent "$app_path" lota-launcher-macos.zip
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lota-launcher-macos
+          path: |
+            app/src-tauri/target/release/bundle/dmg/*.dmg
+            lota-launcher-macos.zip
+
+      - name: Publish to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            app/src-tauri/target/release/bundle/dmg/*.dmg
+            lota-launcher-macos.zip

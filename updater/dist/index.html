@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<title>LOTA Launcher</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #17120E;
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    color: #F3E7D6;
+    user-select: none;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+  }
+  .title {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: #9C8368;
+    margin-bottom: 14px;
+  }
+  .status {
+    font-size: 13px;
+    margin-bottom: 16px;
+    min-height: 18px;
+    text-align: center;
+    padding: 0 20px;
+  }
+  .bar {
+    width: 260px;
+    height: 8px;
+    background: rgba(20, 14, 10, 0.92);
+    border: 1px solid #3A2A1A;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(to right, #F5B449, #E0762B);
+    transition: width 0.3s ease;
+  }
+</style>
+</head>
+<body>
+  <div class="title">LOTA Launcher</div>
+  <div class="status" id="status">Запуск...</div>
+  <div class="bar"><div class="fill" id="fill"></div></div>
+  <script>
+    window.addEventListener("DOMContentLoaded", () => {
+      const statusEl = document.getElementById("status");
+      const fillEl = document.getElementById("fill");
+      const { listen } = window.__TAURI__.event;
+      listen("status", (e) => { statusEl.textContent = e.payload.text; });
+      listen("progress", (e) => { fillEl.style.width = e.payload.percent + "%"; });
+    });
+  </script>
+</body>
+</html>

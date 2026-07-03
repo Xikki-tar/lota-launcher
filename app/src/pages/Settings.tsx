@@ -6,7 +6,7 @@ import { useBackend, apiGet, apiPost, invalidateCache } from "../lib/BackendCont
 import { useI18n } from "../lib/I18nContext";
 import type { PageContext } from "../components/Layout";
 import UpdateDialog from "../components/UpdateDialog";
-import { checkForUpdate, type UpdateCheckResult, type UpdateMode } from "../lib/update";
+import { checkForUpdate, isInAppUpdateMode, type UpdateCheckResult, type UpdateMode } from "../lib/update";
 import styles from "./Settings.module.css";
 
 const LANGUAGES = ["Українська", "Русский", "English"];
@@ -54,7 +54,7 @@ export default function Settings() {
     if (!appVersion) return;
     checkForUpdate(port, appVersion).then(info => {
       setUpdateMode(info.mode);
-      if (info.mode === "appimage" && info.update_available && info.url) setUpdateInfo(info);
+      if (isInAppUpdateMode(info.mode) && info.update_available && info.url) setUpdateInfo(info);
     }).catch(() => {});
   }, [port, appVersion]);
 
@@ -64,7 +64,7 @@ export default function Settings() {
     try {
       const info = await checkForUpdate(port, appVersion);
       setUpdateMode(info.mode);
-      if (info.mode !== "appimage") return;
+      if (!isInAppUpdateMode(info.mode)) return;
       if (info.update_available && info.url) {
         setUpdateInfo(info);
       } else {
@@ -299,7 +299,7 @@ export default function Settings() {
                 </label>
               </fieldset>
 
-              {updateMode === "appimage" && (
+              {isInAppUpdateMode(updateMode) && (
                 <fieldset className={styles.group}>
                   <legend className={styles.groupTitle}>{t("settings_group_updates", "Обновления")}</legend>
                   <div className={styles.caption}>
