@@ -298,9 +298,6 @@ def _install_macos_app_update(zip_path: Path, target_app: Path) -> str:
         if new_app is None:
             raise RuntimeError("update archive has no .app bundle")
 
-        # Меняем директорию бандла целиком, пока процесс из неё же и работает.
-        # На POSIX это норм, открытый файл живёт по inode, а не по пути,
-        # так что похуй, тот же трюк, что и с AppImage.
         backup = target_app.with_name(target_app.name + ".old")
         shutil.rmtree(backup, ignore_errors=True)
         os.replace(target_app, backup)
@@ -310,7 +307,6 @@ def _install_macos_app_update(zip_path: Path, target_app: Path) -> str:
             os.replace(backup, target_app)
             raise
         shutil.rmtree(backup, ignore_errors=True)
-        # apply_update() запускает конкретный бинарник, а не всю .app-папку
         return str(target_app / "Contents" / "MacOS" / "lota-launcher")
     finally:
         shutil.rmtree(extract_dir, ignore_errors=True)
@@ -318,7 +314,6 @@ def _install_macos_app_update(zip_path: Path, target_app: Path) -> str:
 
 @app.post("/update/install")
 def update_install():
-    # На Windows весь апдейт в updater.exe, сюда даже не суётся.
     mode = _update_mode()
     if mode not in ("appimage", "macos-app"):
         return jsonify({"ok": False, "error": "unsupported"}), 400

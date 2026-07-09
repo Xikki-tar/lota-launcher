@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Сборка Linux AppImage: Python-бэкенд (PyInstaller) пакуется как sidecar
-# внутрь Tauri-приложения, дальше `tauri build` собирает сам AppImage.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -46,14 +44,8 @@ if [ ! -d "$APP_DIR/node_modules" ]; then
   (cd "$APP_DIR" && npm install)
 fi
 
-# linuxdeploy тащит с собой древний binutils strip, который дохнет на секциях
-# .relr.dyn из современных линкеров (привет, Arch). Похуй, стрип не критичен.
 export NO_STRIP=1
 
-# На системах, где gdk-pixbuf собран со встроенными лоадерами (нет отдельной
-# /usr/lib/gdk-pixbuf-2.0/<ver>/ директории, привет опять Arch),
-# linuxdeploy-plugin-gtk падает, пытаясь скопировать несуществующий каталог.
-# Патчим закэшированный скрипт плагина нахрен, чтобы он это пережил.
 patch_gtk_plugin_for_builtin_pixbuf_loaders() {
   local plugin_script="${XDG_CACHE_HOME:-$HOME/.cache}/tauri/linuxdeploy-plugin-gtk.sh"
   [ -f "$plugin_script" ] || return 0

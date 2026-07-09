@@ -8,8 +8,6 @@ on:
 
 jobs:
   build:
-    # GitHub-раннер по умолчанию на Apple Silicon (arm64). Билд для Intel-маков
-    # (x86_64) пока не делаем, не на чем проверить нахрен, отдельная тема.
     runs-on: macos-latest
     permissions:
       contents: write
@@ -69,14 +67,10 @@ jobs:
         run: npm ci
 
       - name: Build Tauri app
-        # Сертификата Apple Developer нет, Tauri сам лепит ad-hoc подпись.
-        # Gatekeeper всё равно поднимет хай при первом запуске, это норма.
         working-directory: app
         run: npm run tauri build
 
       - name: Zip the .app bundle
-        # Нужно и как payload для автообновления (backend.py ждёт ровно
-        # zip с .app внутри, не абы что), и просто как удобный файл для скачки.
         run: |
           app_path="$(find app/src-tauri/target/release/bundle/macos -maxdepth 1 -iname '*.app' | head -1)"
           ditto -c -k --sequesterRsrc --keepParent "$app_path" lota-launcher-macos.zip
@@ -93,6 +87,4 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            app/src-tauri/target/release/bundle/dmg/*.dmg
-            lota-launcher-macos.zip
+          files: lota-launcher-macos.zip

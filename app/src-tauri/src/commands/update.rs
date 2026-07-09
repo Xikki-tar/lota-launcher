@@ -9,9 +9,6 @@ pub fn apply_update(app: AppHandle, path: String) -> Result<(), String> {
     Ok(())
 }
 
-// Только Windows: перезапуск через updater.exe, та же хрень что лаунчер сам
-// делает при каждом старте (см. app/src-tauri/src/main.rs). Дёргается кнопкой
-// "Проверить обновления" из уже запущенного приложения.
 #[tauri::command]
 pub fn restart_to_updater(app: AppHandle) -> Result<(), String> {
     let dir = std::env::current_exe()
@@ -25,8 +22,6 @@ pub fn restart_to_updater(app: AppHandle) -> Result<(), String> {
         .spawn()
         .map_err(|e| e.to_string())?;
 
-    // Как и при старте: spawn() нихрена не гарантирует, что процесс реально
-    // ожил (может тут же сдохнуть). Не закрываем приложение вслепую.
     std::thread::sleep(Duration::from_millis(400));
     if let Ok(Some(status)) = child.try_wait() {
         if !status.success() {

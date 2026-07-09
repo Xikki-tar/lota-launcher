@@ -1,4 +1,3 @@
-// Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 // на Windows каждый запуск лаунчера сперва отдаёт управление updater.exe
@@ -20,9 +19,8 @@ fn windows_updater_bootstrap() -> bool {
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))
         .unwrap_or_else(|| PathBuf::from("."));
 
-    // Апдейтер сам себя обновить не может, пока работает, поэтому новую
-    // версию кладёт рядом как updater.exe.new. Только лаунчер (апдейтер в
-    // этот момент точно дохлый) может её накатить.
+    // апдейтер сам себя обновить не может пока работает поэтому новую версию кладёт рядом как updater.exe.new
+    // только лаунчер апдейтер в этот момент точно дохлый может её накатить
     let updater_new = dir.join("updater.exe.new");
     if updater_new.exists() {
         let updater_path = dir.join("updater.exe");
@@ -38,11 +36,7 @@ fn windows_updater_bootstrap() -> bool {
         Ok(c) => c,
         Err(_) => return false,
     };
-
-    // spawn() говорит Ok, даже если процесс тут же сдох нахрен (не хватило
-    // какой-нибудь системной dll, например) — Windows успевает создать
-    // процесс раньше, чем он реально начинает исполняться. Даём ему долю
-    // секунды и проверяем, что он ещё дышит, прежде чем отдавать управление.
+    
     std::thread::sleep(Duration::from_millis(400));
     !matches!(child.try_wait(), Ok(Some(status)) if !status.success())
 }
