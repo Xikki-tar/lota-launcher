@@ -157,6 +157,7 @@ def _lib() -> LibraryService:
 
 
 UPDATE_CHANNEL = os.getenv("LOTA_LAUNCHER_CHANNEL", "stable").strip() or "stable"
+GITHUB_REPO = "Xikki-tar/lota-launcher"
 _MACHINE_ALIASES = {"amd64": "x86_64", "x64": "x86_64", "x86-64": "x86_64", "aarch64": "arm64"}
 
 
@@ -222,13 +223,67 @@ def _check_launcher_update(local_version: str) -> dict | None:
     return data
 
 
+def _version_tuple(v: str) -> tuple[int, ...]:
+    parts = []
+    for chunk in str(v or "0").strip().lstrip("vV").split("."):
+        digits = "".join(ch for ch in chunk if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts) or (0,)
+
+
+def _check_launcher_update_github(local_version: str) -> dict | None:
+    # Linux качает обновления прямо из GitHub Releases, а не с сервера.
+    try:
+        resp = http.get(
+            f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+            headers={"Accept": "application/vnd.github+json"},
+            timeout=15,
+        )
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+    if resp.status_code != 200:
+        return {"ok": False, "error": f"HTTP {resp.status_code}"}
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+
+    assets = data.get("assets") or []
+    asset = next((a for a in assets if str(a.get("name") or "").endswith(".AppImage")), None)
+    if not asset:
+        return {"ok": False, "error": "no_appimage_asset"}
+
+    sha256 = ""
+    sha_asset = next((a for a in assets if str(a.get("name") or "").endswith(".sha256")), None)
+    if sha_asset:
+        try:
+            sha_resp = http.get(sha_asset["browser_download_url"], timeout=15)
+            sha256 = sha_resp.text.strip().split()[0]
+        except Exception:
+            sha256 = ""
+
+    remote_version = str(data.get("tag_name") or "").strip().lstrip("vV")
+    return {
+        "ok": True,
+        "update_available": _version_tuple(remote_version) > _version_tuple(local_version),
+        "version": remote_version,
+        "url": asset.get("browser_download_url") or "",
+        "sha256": sha256,
+        "size": int(asset.get("size") or 0),
+    }
+
+
 @app.get("/update/check")
 def update_check():
     mode = _update_mode()
     if mode not in ("appimage", "macos-app"):
         return jsonify({"ok": True, "mode": mode, "update_available": False})
     local_version = str(request.args.get("version") or "0.0.0")
-    data = _check_launcher_update(local_version)
+    data = (
+        _check_launcher_update_github(local_version)
+        if mode == "appimage"
+        else _check_launcher_update(local_version)
+    )
     if not data or data.get("ok") is not True:
         return jsonify({"ok": False, "mode": mode, "error": data.get("error") if data else "check_failed"})
     data["mode"] = mode

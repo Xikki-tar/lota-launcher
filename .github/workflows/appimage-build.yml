@@ -53,14 +53,27 @@ jobs:
       - name: Build AppImage
         run: ./packaging/build-appimage.sh
 
+      - name: Checksum
+        # Апдейтер на Linux качает обновления прямо из GitHub Releases и
+        # сверяет sha256 — нужен файл рядом с самим AppImage.
+        run: |
+          cd app/src-tauri/target/release/bundle/appimage
+          for f in *.AppImage; do
+            sha256sum "$f" > "$f.sha256"
+          done
+
       - name: Upload AppImage
         uses: actions/upload-artifact@v4
         with:
           name: lota-launcher-appimage
-          path: app/src-tauri/target/release/bundle/appimage/*.AppImage
+          path: |
+            app/src-tauri/target/release/bundle/appimage/*.AppImage
+            app/src-tauri/target/release/bundle/appimage/*.sha256
 
       - name: Publish to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: app/src-tauri/target/release/bundle/appimage/*.AppImage
+          files: |
+            app/src-tauri/target/release/bundle/appimage/*.AppImage
+            app/src-tauri/target/release/bundle/appimage/*.sha256
