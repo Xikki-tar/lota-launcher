@@ -187,8 +187,6 @@ def _appimage_path() -> Path | None:
 def _macos_app_bundle_path() -> Path | None:
     if platform.system() != "Darwin" or not getattr(sys, "frozen", False):
         return None
-    # frozen backend сидит в LotaLauncher.app/Contents/MacOS/backend —
-    # поднимаемся до самого .app, без привязки к точной глубине вложенности.
     for parent in Path(sys.executable).resolve().parents:
         if parent.suffix == ".app":
             return parent
@@ -196,8 +194,6 @@ def _macos_app_bundle_path() -> Path | None:
 
 
 def _update_mode() -> str | None:
-    # Windows обновляется отдельным updater.exe (см. updater/src-tauri) —
-    # питон в этом вообще не участвует, апдейтер сам стучится на сервер.
     system = platform.system()
     if system == "Windows":
         return "external" if getattr(sys, "frozen", False) else None
@@ -232,7 +228,6 @@ def _version_tuple(v: str) -> tuple[int, ...]:
 
 
 def _check_launcher_update_github(local_version: str) -> dict | None:
-    # Linux качает обновления прямо из GitHub Releases, а не с сервера.
     try:
         resp = http.get(
             f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
@@ -303,9 +298,9 @@ def _install_macos_app_update(zip_path: Path, target_app: Path) -> str:
         if new_app is None:
             raise RuntimeError("update archive has no .app bundle")
 
-        # Замена директории бандла целиком, пока текущий процесс из неё же
-        # исполняется — на POSIX это безопасно (открытый файл живёт по inode,
-        # не по пути), тот же принцип, что и с AppImage.
+        # Меняем директорию бандла целиком, пока процесс из неё же и работает.
+        # На POSIX это норм, открытый файл живёт по inode, а не по пути,
+        # так что похуй, тот же трюк, что и с AppImage.
         backup = target_app.with_name(target_app.name + ".old")
         shutil.rmtree(backup, ignore_errors=True)
         os.replace(target_app, backup)
@@ -315,7 +310,7 @@ def _install_macos_app_update(zip_path: Path, target_app: Path) -> str:
             os.replace(backup, target_app)
             raise
         shutil.rmtree(backup, ignore_errors=True)
-        # apply_update() запускает конкретный бинарник, не .app-директорию
+        # apply_update() запускает конкретный бинарник, а не всю .app-папку
         return str(target_app / "Contents" / "MacOS" / "lota-launcher")
     finally:
         shutil.rmtree(extract_dir, ignore_errors=True)
@@ -323,7 +318,7 @@ def _install_macos_app_update(zip_path: Path, target_app: Path) -> str:
 
 @app.post("/update/install")
 def update_install():
-    # На Windows апдейт полностью в updater.exe, сюда не заходит.
+    # На Windows весь апдейт в updater.exe, сюда даже не суётся.
     mode = _update_mode()
     if mode not in ("appimage", "macos-app"):
         return jsonify({"ok": False, "error": "unsupported"}), 400

@@ -55,7 +55,8 @@ jobs:
 
       - name: Checksum
         # Апдейтер на Linux качает обновления прямо из GitHub Releases и
-        # сверяет sha256 — нужен файл рядом с самим AppImage.
+        # сверяет sha256, так что нужен файл рядом с самим AppImage, иначе
+        # нечего сверять.
         run: |
           cd app/src-tauri/target/release/bundle/appimage
           for f in *.AppImage; do

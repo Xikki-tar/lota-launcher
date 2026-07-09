@@ -1,10 +1,10 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-// На Windows каждый запуск лаунчера сперва передаёт управление updater.exe
-// (сам лаунчер не может подменить себя на диске, пока запущен — updater
-// может, раз он не запущен из подменяемого файла). Если updater.exe не
-// нашёлся/не запустился — не блокируем пользователя, работаем как обычно.
+// на Windows каждый запуск лаунчера сперва отдаёт управление updater.exe
+// сам себя лаунчер подменить не может пока живой а апдейтер может раз он
+// не запущен из того файла, который меняем если updater.exe не нашёлся или
+// обосрался при запуске похуй не блокируем юзера работаем как обычно
 #[cfg(target_os = "windows")]
 fn windows_updater_bootstrap() -> bool {
     use std::path::PathBuf;
@@ -20,9 +20,9 @@ fn windows_updater_bootstrap() -> bool {
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))
         .unwrap_or_else(|| PathBuf::from("."));
 
-    // Апдейтер не может заменить сам себя во время своей же работы — новую
-    // версию он кладёт как updater.exe.new. Только лаунчер (в этот момент
-    // updater точно не запущен) может её применить.
+    // Апдейтер сам себя обновить не может, пока работает, поэтому новую
+    // версию кладёт рядом как updater.exe.new. Только лаунчер (апдейтер в
+    // этот момент точно дохлый) может её накатить.
     let updater_new = dir.join("updater.exe.new");
     if updater_new.exists() {
         let updater_path = dir.join("updater.exe");
@@ -34,10 +34,17 @@ fn windows_updater_bootstrap() -> bool {
         }
     }
 
-    Command::new(dir.join("updater.exe"))
-        .current_dir(&dir)
-        .spawn()
-        .is_ok()
+    let mut child = match Command::new(dir.join("updater.exe")).current_dir(&dir).spawn() {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    // spawn() говорит Ok, даже если процесс тут же сдох нахрен (не хватило
+    // какой-нибудь системной dll, например) — Windows успевает создать
+    // процесс раньше, чем он реально начинает исполняться. Даём ему долю
+    // секунды и проверяем, что он ещё дышит, прежде чем отдавать управление.
+    std::thread::sleep(Duration::from_millis(400));
+    !matches!(child.try_wait(), Ok(Some(status)) if !status.success())
 }
 
 fn main() {

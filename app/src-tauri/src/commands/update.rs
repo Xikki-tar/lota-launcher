@@ -1,4 +1,5 @@
 use std::process::Command;
+use std::time::Duration;
 use tauri::AppHandle;
 
 #[tauri::command]
@@ -8,9 +9,9 @@ pub fn apply_update(app: AppHandle, path: String) -> Result<(), String> {
     Ok(())
 }
 
-// Windows-only: перезапуск через updater.exe (тот же путь, что лаунчер сам
-// проходит при каждом запуске — см. app/src-tauri/src/main.rs). Вызывается
-// кнопкой "Проверить обновления" из уже запущенного приложения.
+// Только Windows: перезапуск через updater.exe, та же хрень что лаунчер сам
+// делает при каждом старте (см. app/src-tauri/src/main.rs). Дёргается кнопкой
+// "Проверить обновления" из уже запущенного приложения.
 #[tauri::command]
 pub fn restart_to_updater(app: AppHandle) -> Result<(), String> {
     let dir = std::env::current_exe()
@@ -19,10 +20,20 @@ pub fn restart_to_updater(app: AppHandle) -> Result<(), String> {
         .ok_or("no parent dir")?
         .to_path_buf();
 
-    Command::new(dir.join("updater.exe"))
+    let mut child = Command::new(dir.join("updater.exe"))
         .current_dir(&dir)
         .spawn()
         .map_err(|e| e.to_string())?;
+
+    // Как и при старте: spawn() нихрена не гарантирует, что процесс реально
+    // ожил (может тут же сдохнуть). Не закрываем приложение вслепую.
+    std::thread::sleep(Duration::from_millis(400));
+    if let Ok(Some(status)) = child.try_wait() {
+        if !status.success() {
+            return Err("updater exited immediately".to_string());
+        }
+    }
+
     app.exit(0);
     Ok(())
 }

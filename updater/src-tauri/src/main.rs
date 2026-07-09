@@ -160,8 +160,8 @@ fn extract_zip(zip_path: &Path, dest_dir: &Path) -> Result<(), String> {
 }
 
 // Windows держит только что скачанный exe заблокированным ещё долю секунды
-// (антивирус/файловая система), плюс возможна гонка с выходом launcher.exe —
-// поэтому переименование с ретраями, а не одна попытка.
+// (антивирус лезет проверять, сука, или файловая система тупит), плюс
+// возможна гонка с выходом launcher.exe. Поэтому ретраи, а не одна попытка.
 fn replace_with_retry(src: &Path, dest: &Path) -> Result<(), String> {
     let mut last_err = String::new();
     for _ in 0..10 {
@@ -199,9 +199,9 @@ async fn run_update_flow(app: AppHandle) {
                         if new_backend.exists() {
                             let _ = replace_with_retry(&new_backend, &dir.join(BACKEND_EXE));
                         }
-                        // updater не может заменить сам себя во время работы —
-                        // кладём как .new, лаунчер подхватит и переименует при
-                        // следующем запуске (см. app/src-tauri/src/main.rs).
+                        // updater сам себя обновить не может, пока живой,
+                        // так что кладём как .new. Лаунчер подхватит и
+                        // переименует при следующем запуске (см. main.rs).
                         let new_updater = extract_dir.join(UPDATER_EXE);
                         if new_updater.exists() {
                             let _ = replace_with_retry(
@@ -223,8 +223,8 @@ async fn run_update_flow(app: AppHandle) {
             let _ = std::fs::remove_dir_all(&tmp_dir);
         }
     }
-    // Сеть недоступна или обновлений нет — просто продолжаем запуск как есть
-    // (fail-open: апдейтер никогда не должен блокировать запуск лаунчера).
+    // Нет сети или нет обновлений — да и хер с ним, продолжаем запуск как есть
+    // (fail-open: апдейтер вообще никогда не должен блокировать запуск лаунчера).
 
     let launcher_path = dir.join(LAUNCHER_EXE);
     let _ = Command::new(&launcher_path)
