@@ -14,12 +14,12 @@ env/
 *.local
 build/
 dist/
-# updater/dist — рукописный исходник (index.html), не сборочный вывод
 !/updater/dist/
 !/updater/dist/**
 *.spec
 .DS_Store
 Thumbs.db
+.directory
 .idea/
 .vscode/
 *.log
@@ -27,3 +27,8 @@ Thumbs.db
 devtools/
 .tools/
 .dev-port
+/target/
+/$tmp/
+*.swp
+*.swo
+*~

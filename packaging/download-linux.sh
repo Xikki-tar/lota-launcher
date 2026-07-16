@@ -36,7 +36,7 @@ fi
 
 NAME="$(basename "$URL")"
 echo "-> Downloading $NAME..."
-if ! curl -fsSL -o "$NAME" "$URL"; then
+if ! curl -fL --progress-bar -o "$NAME" "$URL"; then
   echo "Download failed." >&2
   exit 1
 fi
