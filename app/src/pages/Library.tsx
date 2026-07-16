@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useBackend, apiGet, apiPost, apiDelete, invalidateCache } from "../lib/BackendContext";
 import { useI18n } from "../lib/I18nContext";
 import type { PageContext } from "../components/Layout";
+import LoadingDots from "../components/LoadingDots";
 import styles from "./Library.module.css";
 
 interface Build {
@@ -317,7 +318,7 @@ export default function Library() {
           <div className={styles.sectionLabel}>{t("library_info_section", "Информация")}</div>
 
           {loading ? (
-            <div className={styles.loading}>Загрузка...</div>
+            <div className={styles.loading}><LoadingDots label="Загрузка" /></div>
           ) : !activeBuild ? (
             <div className={styles.infoEmpty}>
               <div className={styles.infoEmptyTitle}>{t("library_info_empty_title", "Выберите элемент")}</div>

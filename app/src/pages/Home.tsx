@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useBackend, apiGet } from "../lib/BackendContext";
 import { useI18n } from "../lib/I18nContext";
+import LoadingDots from "../components/LoadingDots";
 import styles from "./Home.module.css";
 
 function newsImageUrl(port: number | null, path: string | undefined): string | null {
@@ -167,7 +168,7 @@ export default function Home() {
       <div className={styles.newsLabel}>{t("news_title", "Новости")}</div>
       <div className={styles.newsList}>
         {loading ? (
-          <div className={styles.empty}>Загрузка...</div>
+          <div className={styles.empty}><LoadingDots label="Загрузка" /></div>
         ) : news.length === 0 ? (
           <div className={styles.empty}>{t("news_empty", "Новостей пока нет.")}</div>
         ) : (

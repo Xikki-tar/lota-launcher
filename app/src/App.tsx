@@ -12,6 +12,7 @@ import Account from "./pages/Account";
 import Friends from "./pages/Friends";
 import ErrorBoundary from "./components/ErrorBoundary";
 import UpdateDialog from "./components/UpdateDialog";
+import LoadingDots from "./components/LoadingDots";
 import { BackendProvider } from "./lib/BackendContext";
 import { I18nProvider } from "./lib/I18nContext";
 import { checkForUpdate, isInAppUpdateMode, type UpdateCheckResult } from "./lib/update";
@@ -66,7 +67,7 @@ export default function App() {
     return (
       <div className="app">
         <TitleBar version="v0.1.0" />
-        <div className="splash">Загрузка...</div>
+        <div className="splash"><LoadingDots label="Загрузка" /></div>
       </div>
     );
   }

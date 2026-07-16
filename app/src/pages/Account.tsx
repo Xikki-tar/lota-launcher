@@ -3,6 +3,7 @@ import { useOutletContext } from "react-router-dom";
 import { useBackend, apiGet, apiPost } from "../lib/BackendContext";
 import { useI18n } from "../lib/I18nContext";
 import type { PageContext } from "../components/Layout";
+import LoadingDots from "../components/LoadingDots";
 import styles from "./Account.module.css";
 
 interface AccountData {
@@ -188,7 +189,7 @@ export default function Account() {
           <div className={styles.pageTitle}>{t("btn_account", "Аккаунт")}</div>
 
           {loading ? (
-            <div className={styles.loading}>Загрузка...</div>
+            <div className={styles.loading}><LoadingDots label="Загрузка" /></div>
           ) : (
             <>
               <div className={styles.sectionLabel}>{t("account_profile", "Профиль")}</div>

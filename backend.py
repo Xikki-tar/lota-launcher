@@ -390,6 +390,7 @@ def auth_load():
 
 @app.post("/auth/save")
 def auth_save():
+    global _skin_sync_attempted
     body = request.json or {}
     save_auth_data(
         str(body.get("token") or ""),
@@ -398,6 +399,7 @@ def auth_save():
         int(body.get("sub_level") or 0),
         str(body.get("player_uuid") or ""),
     )
+    _skin_sync_attempted = False
     return jsonify({"ok": True})
 
 
@@ -897,10 +899,127 @@ def news_image():
     return Response(status=404)
 
 
+_skin_sync_attempted = False
+_skin_sync_lock = threading.Lock()
+
+
+def _extract_skin_profile(data):
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict):
+                profile = _extract_skin_profile(item)
+                if profile:
+                    return profile
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    direct_hash = str(data.get("skin_hash") or data.get("hash") or "").strip()
+    if direct_hash:
+        return data
+
+    for key in ("profile", "result", "data", "player", "entry"):
+        candidate = data.get(key)
+        if isinstance(candidate, dict):
+            profile = _extract_skin_profile(candidate)
+            if profile:
+                return profile
+
+    for key in ("profiles", "results", "players", "entries", "items"):
+        candidate = data.get(key)
+        if isinstance(candidate, dict):
+            for item in candidate.values():
+                if isinstance(item, dict):
+                    profile = _extract_skin_profile(item)
+                    if profile:
+                        return profile
+        if isinstance(candidate, list):
+            for item in candidate:
+                if isinstance(item, dict):
+                    profile = _extract_skin_profile(item)
+                    if profile:
+                        return profile
+    return None
+
+
+def _sync_skin_from_server() -> dict:
+    auth = load_auth_data() or {}
+    token = str(auth.get("token") or "").strip()
+    player_uuid = str(auth.get("player_uuid") or "").strip()
+    username = str(auth.get("username") or "").strip()
+    if not token or (not player_uuid and not username):
+        return {"ok": False, "error": "no_profile_identity"}
+
+    identity_payload = {}
+    if player_uuid:
+        identity_payload["player_uuid"] = player_uuid
+    if username:
+        identity_payload["username"] = username
+
+    try:
+        resp = http.post(
+            f"{get_api_base()}/api/skins/profiles/check",
+            json={"token": token, "players": [identity_payload]},
+            timeout=10,
+        )
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+    if resp.status_code != 200:
+        return {"ok": False, "error": f"http_{resp.status_code}"}
+    try:
+        data = resp.json()
+    except Exception:
+        return {"ok": False, "error": "bad_response"}
+
+    profile_data = _extract_skin_profile(data)
+    if not profile_data:
+        return {"ok": False, "error": "profile_not_found"}
+
+    skin_hash = str(profile_data.get("skin_hash") or profile_data.get("hash") or "").strip()
+    if not skin_hash:
+        return {"ok": False, "error": "skin_hash_missing"}
+
+    model = str(profile_data.get("model") or profile_data.get("skin_model") or "classic").strip().lower()
+    if model not in ("classic", "slim"):
+        model = "classic"
+
+    try:
+        file_resp = http.get(
+            f"{get_api_base()}/api/skins/file/{skin_hash}",
+            params={"token": token},
+            timeout=15,
+        )
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+    if file_resp.status_code != 200:
+        return {"ok": False, "error": f"skin_file_http_{file_resp.status_code}"}
+
+    target_path = get_data_dir() / "skin.png"
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_bytes(file_resp.content)
+    save_skin_model(model)
+    return {"ok": True, "path": str(target_path), "model": model, "skin_hash": skin_hash}
+
+
+def _ensure_skin_cached() -> None:
+    global _skin_sync_attempted
+    if (get_data_dir() / "skin.png").exists():
+        return
+    with _skin_sync_lock:
+        if _skin_sync_attempted:
+            return
+        _skin_sync_attempted = True
+    try:
+        _sync_skin_from_server()
+    except Exception:
+        pass
+
+
 @app.get("/skin/head")
 def skin_head():
     from PIL import Image as PilImage
     size = min(max(int(request.args.get("size", 40)), 8), 256)
+    _ensure_skin_cached()
     skin_path = get_data_dir() / "skin.png"
     try:
         if not skin_path.exists():
@@ -976,6 +1095,7 @@ def skin_model():
     from PIL import Image as PilImage
     width  = min(max(int(request.args.get("w", 200)), 32), 512)
     height = min(max(int(request.args.get("h", 400)), 32), 1024)
+    _ensure_skin_cached()
     skin_path = get_data_dir() / "skin.png"
 
     try:

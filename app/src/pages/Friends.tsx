@@ -3,6 +3,7 @@ import { useOutletContext } from "react-router-dom";
 import { useBackend, apiGet, apiPost } from "../lib/BackendContext";
 import { useI18n } from "../lib/I18nContext";
 import type { PageContext } from "../components/Layout";
+import LoadingDots from "../components/LoadingDots";
 import styles from "./Friends.module.css";
 
 const RANK_GRADIENTS: Record<number, [string, string]> = {
@@ -239,7 +240,7 @@ export default function Friends() {
           </div>
 
           {loading ? (
-            <div className={styles.loading}>Загрузка...</div>
+            <div className={styles.loading}><LoadingDots label="Загрузка" /></div>
           ) : (
             <div className={tabAnim ? styles.tabFade : ""}>
               {tab === "friends" ? (

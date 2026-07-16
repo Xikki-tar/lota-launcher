@@ -6,6 +6,7 @@ import { useBackend, apiGet, apiPost, invalidateCache } from "../lib/BackendCont
 import { useI18n } from "../lib/I18nContext";
 import type { PageContext } from "../components/Layout";
 import UpdateDialog from "../components/UpdateDialog";
+import LoadingDots from "../components/LoadingDots";
 import { checkForUpdate, isInAppUpdateMode, type UpdateCheckResult, type UpdateMode } from "../lib/update";
 import styles from "./Settings.module.css";
 
@@ -163,7 +164,7 @@ export default function Settings() {
           <div className={styles.pageTitle}>{t("settings_title", "Настройки")}</div>
 
           {loading ? (
-            <div className={styles.loading}>Загрузка...</div>
+            <div className={styles.loading}><LoadingDots label="Загрузка" /></div>
           ) : (
             <div className={styles.groups}>
               <fieldset className={styles.group}>
