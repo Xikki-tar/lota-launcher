@@ -52,6 +52,9 @@ jobs:
               j.version = '$VERSION';
               fs.writeFileSync(p, JSON.stringify(j, null, 2) + '\n');
             }
+            const cargoPath = 'app/src-tauri/Cargo.toml';
+            const cargo = fs.readFileSync(cargoPath, 'utf8');
+            fs.writeFileSync(cargoPath, cargo.replace(/^version = \".*\"/m, 'version = \"$VERSION\"'));
           "
 
       - name: Install Python dependencies
@@ -86,12 +89,6 @@ jobs:
           cp build/windows/dist/backend.exe "app/src-tauri/binaries/backend-$target_triple.exe"
           cp updater/src-tauri/target/release/updater.exe "app/src-tauri/binaries/updater-$target_triple.exe"
 
-      - name: Write launcher.version (read by the updater, bundled via bundle.resources)
-        shell: bash
-        run: |
-          version="$(node -p "require('./app/src-tauri/tauri.conf.json').version")"
-          echo -n "$version" > app/src-tauri/launcher.version
-
       - name: Install frontend dependencies
         working-directory: app
         run: npm ci
@@ -106,7 +103,6 @@ jobs:
           Copy-Item app/src-tauri/target/release/lota-launcher.exe portable/lota-launcher-portable/
           Copy-Item app/src-tauri/target/release/backend.exe portable/lota-launcher-portable/
           Copy-Item updater/src-tauri/target/release/updater.exe portable/lota-launcher-portable/
-          Copy-Item app/src-tauri/launcher.version portable/lota-launcher-portable/
           Compress-Archive -Path portable/lota-launcher-portable/* -DestinationPath lota-launcher-portable-windows.zip
 
       - name: Upload installers

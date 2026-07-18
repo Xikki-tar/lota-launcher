@@ -16,7 +16,6 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 tokio = { version = "1", features = ["full"] }
 futures-util = "0.3"
 sha2 = "0.10"
-zip = "2"
 
 [profile.release]
 strip = true

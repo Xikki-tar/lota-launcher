@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -18,6 +19,8 @@ const LAUNCHER_EXE: &str = "lota-launcher.exe";
 const BACKEND_EXE: &str = "backend.exe";
 const UPDATER_EXE: &str = "updater.exe";
 const VERSION_FILE: &str = "launcher.version";
+const PLATFORM: &str = "windows-x86_64";
+const CHANNEL: &str = "stable";
 
 #[derive(Clone, Serialize)]
 struct StatusPayload {
@@ -29,20 +32,24 @@ struct ProgressPayload {
     percent: u32,
 }
 
-#[derive(Deserialize, Default)]
-struct CheckResponse {
-    #[serde(default)]
-    ok: bool,
-    #[serde(default)]
-    update_available: bool,
+#[derive(Deserialize, Clone, Default)]
+struct RuntimeArtifact {
     #[serde(default)]
     version: String,
-    #[serde(default)]
-    url: String,
     #[serde(default)]
     sha256: String,
     #[serde(default)]
     size: u64,
+    #[serde(default)]
+    url: String,
+}
+
+#[derive(Deserialize, Default)]
+struct RuntimeCheckResponse {
+    #[serde(default)]
+    ok: bool,
+    #[serde(default)]
+    artifacts: HashMap<String, RuntimeArtifact>,
 }
 
 fn exe_dir() -> PathBuf {
@@ -60,12 +67,6 @@ fn read_local_version(dir: &Path) -> String {
         .unwrap_or_else(|| "0.0.0".to_string())
 }
 
-fn write_local_version(dir: &Path, version: &str) {
-    if !version.is_empty() {
-        let _ = std::fs::write(dir.join(VERSION_FILE), version);
-    }
-}
-
 fn emit_status(app: &AppHandle, text: impl Into<String>) {
     let _ = app.emit("status", StatusPayload { text: text.into() });
 }
@@ -74,53 +75,70 @@ fn emit_progress(app: &AppHandle, percent: u32) {
     let _ = app.emit("progress", ProgressPayload { percent });
 }
 
-async fn check_update(local_version: &str) -> Option<CheckResponse> {
-    let client = reqwest::Client::builder()
-        .timeout(CHECK_TIMEOUT)
-        .build()
-        .ok()?;
-    let payload = serde_json::json!({
-        "platform": "windows-x86_64",
-        "version": local_version,
-        "channel": "stable",
-    });
+fn version_tuple(v: &str) -> Vec<u32> {
+    v.trim()
+        .trim_start_matches(['v', 'V'])
+        .split('.')
+        .map(|chunk| {
+            let digits: String = chunk.chars().filter(char::is_ascii_digit).collect();
+            digits.parse().unwrap_or(0)
+        })
+        .collect()
+}
+
+fn version_newer(remote: &str, local: &str) -> bool {
+    let mut r = version_tuple(remote);
+    let mut l = version_tuple(local);
+    let len = r.len().max(l.len());
+    r.resize(len, 0);
+    l.resize(len, 0);
+    r > l
+}
+
+async fn fetch_runtime_manifest() -> Option<(String, RuntimeCheckResponse)> {
+    let client = reqwest::Client::builder().timeout(CHECK_TIMEOUT).build().ok()?;
+    let payload = serde_json::json!({ "platform": PLATFORM, "channel": CHANNEL });
 
     for base in API_BASES {
-        let url = format!("{base}/api/launcher/check");
+        let url = format!("{base}/api/runtime/check");
         let Ok(resp) = client.post(&url).json(&payload).send().await else {
             continue;
         };
-        let Ok(data) = resp.json::<CheckResponse>().await else {
+        let Ok(data) = resp.json::<RuntimeCheckResponse>().await else {
             continue;
         };
         if data.ok {
-            return Some(data);
+            return Some((base.to_string(), data));
         }
     }
     None
 }
 
-async fn download_and_verify(
+async fn download_artifact(
     app: &AppHandle,
-    url: &str,
-    sha256: &str,
-    expected_size: u64,
-    dest_dir: &Path,
-) -> Result<PathBuf, String> {
-    emit_status(app, "Скачиваю обновление...");
+    base: &str,
+    artifact: &RuntimeArtifact,
+    tmp_path: &Path,
+    status_label: &str,
+) -> Result<(), String> {
+    emit_status(app, status_label);
 
     let client = reqwest::Client::builder()
         .timeout(DOWNLOAD_TIMEOUT)
         .build()
         .map_err(|e| e.to_string())?;
-    let resp = client.get(url).send().await.map_err(|e| e.to_string())?;
+    let url = if artifact.url.starts_with("http") {
+        artifact.url.clone()
+    } else {
+        format!("{base}{}", artifact.url)
+    };
+    let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));
     }
-    let total = resp.content_length().unwrap_or(expected_size);
+    let total = resp.content_length().unwrap_or(artifact.size);
 
-    let zip_path = dest_dir.join("update.zip");
-    let mut file = std::fs::File::create(&zip_path).map_err(|e| e.to_string())?;
+    let mut file = std::fs::File::create(tmp_path).map_err(|e| e.to_string())?;
     let mut hasher = Sha256::new();
     let mut downloaded: u64 = 0;
 
@@ -131,30 +149,22 @@ async fn download_and_verify(
         hasher.update(&chunk);
         downloaded += chunk.len() as u64;
         if total > 0 {
-            let pct = ((downloaded * 100) / total).min(100) as u32;
-            emit_progress(app, pct);
+            emit_progress(app, ((downloaded * 100) / total).min(100) as u32);
         }
     }
     drop(file);
 
     if downloaded == 0 {
-        let _ = std::fs::remove_file(&zip_path);
+        let _ = std::fs::remove_file(tmp_path);
         return Err("empty download".to_string());
     }
 
     let digest = format!("{:x}", hasher.finalize());
-    if !sha256.is_empty() && digest.to_lowercase() != sha256.to_lowercase() {
-        let _ = std::fs::remove_file(&zip_path);
+    if !artifact.sha256.is_empty() && digest.to_lowercase() != artifact.sha256.to_lowercase() {
+        let _ = std::fs::remove_file(tmp_path);
         return Err("sha256 mismatch".to_string());
     }
 
-    Ok(zip_path)
-}
-
-fn extract_zip(zip_path: &Path, dest_dir: &Path) -> Result<(), String> {
-    let file = std::fs::File::open(zip_path).map_err(|e| e.to_string())?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
-    archive.extract(dest_dir).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -172,58 +182,74 @@ fn replace_with_retry(src: &Path, dest: &Path) -> Result<(), String> {
     Err(last_err)
 }
 
+async fn launch_launcher_and_exit(app: &AppHandle, dir: &Path) {
+    let launcher_path = dir.join(LAUNCHER_EXE);
+    let _ = Command::new(&launcher_path)
+        .arg(SKIP_UPDATER_ARG)
+        .current_dir(dir)
+        .spawn();
+
+    std::thread::sleep(Duration::from_millis(300));
+    app.exit(0);
+}
+
 async fn run_update_flow(app: AppHandle) {
     let dir = exe_dir();
     let local_version = read_local_version(&dir);
     emit_status(&app, "Проверяю обновления...");
 
-    if let Some(info) = check_update(&local_version).await {
-        if info.update_available && !info.url.is_empty() {
-            let tmp_dir = std::env::temp_dir().join(format!("lota-update-{}", std::process::id()));
-            let _ = std::fs::create_dir_all(&tmp_dir);
+    let Some((base, manifest)) = fetch_runtime_manifest().await else {
+        launch_launcher_and_exit(&app, &dir).await;
+        return;
+    };
 
-            match download_and_verify(&app, &info.url, &info.sha256, info.size, &tmp_dir).await {
-                Ok(zip_path) => {
-                    emit_status(&app, "Устанавливаю...");
-                    let extract_dir = tmp_dir.join("extracted");
-                    if extract_zip(&zip_path, &extract_dir).is_ok() {
-                        let new_launcher = extract_dir.join(LAUNCHER_EXE);
-                        if new_launcher.exists() {
-                            let _ = replace_with_retry(&new_launcher, &dir.join(LAUNCHER_EXE));
-                        }
-                        let new_backend = extract_dir.join(BACKEND_EXE);
-                        if new_backend.exists() {
-                            let _ = replace_with_retry(&new_backend, &dir.join(BACKEND_EXE));
-                        }
-                        let new_updater = extract_dir.join(UPDATER_EXE);
-                        if new_updater.exists() {
-                            let _ = replace_with_retry(
-                                &new_updater,
-                                &dir.join(format!("{UPDATER_EXE}.new")),
-                            );
-                        }
-                        write_local_version(&dir, &info.version);
-                        emit_status(&app, "Готово, запускаю...");
-                    } else {
-                        emit_status(&app, "Не удалось распаковать обновление, запускаю текущую версию...");
-                    }
-                }
-                Err(e) => {
-                    emit_status(&app, format!("Не удалось скачать обновление ({e}), запускаю текущую версию..."));
+    let Some(launcher_artifact) = manifest.artifacts.get("launcher") else {
+        launch_launcher_and_exit(&app, &dir).await;
+        return;
+    };
+
+    if !version_newer(&launcher_artifact.version, &local_version) {
+        launch_launcher_and_exit(&app, &dir).await;
+        return;
+    }
+
+    let tmp_dir = std::env::temp_dir().join(format!("lota-update-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&tmp_dir);
+
+    let targets: [(&str, PathBuf, &str); 4] = [
+        ("launcher", dir.join(LAUNCHER_EXE), "Скачиваю lota-launcher.exe..."),
+        ("backend", dir.join(BACKEND_EXE), "Скачиваю backend.exe..."),
+        ("updater", dir.join(format!("{UPDATER_EXE}.new")), "Скачиваю updater.exe..."),
+        ("version", dir.join(VERSION_FILE), "Обновляю launcher.version..."),
+    ];
+
+    let mut failed = false;
+    for (name, dest, label) in targets {
+        let Some(artifact) = manifest.artifacts.get(name) else {
+            continue;
+        };
+        let tmp_path = tmp_dir.join(name);
+        match download_artifact(&app, &base, artifact, &tmp_path, label).await {
+            Ok(()) => {
+                if replace_with_retry(&tmp_path, &dest).is_err() {
+                    failed = true;
                 }
             }
-
-            let _ = std::fs::remove_dir_all(&tmp_dir);
+            Err(_) => failed = true,
         }
     }
-    let launcher_path = dir.join(LAUNCHER_EXE);
-    let _ = Command::new(&launcher_path)
-        .arg(SKIP_UPDATER_ARG)
-        .current_dir(&dir)
-        .spawn();
 
-    std::thread::sleep(Duration::from_millis(300));
-    app.exit(0);
+    emit_status(
+        &app,
+        if failed {
+            "Часть файлов не удалось обновить, запускаю..."
+        } else {
+            "Готово, запускаю..."
+        },
+    );
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+
+    launch_launcher_and_exit(&app, &dir).await;
 }
 
 fn main() {

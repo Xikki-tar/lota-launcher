@@ -19,8 +19,6 @@ fn windows_updater_bootstrap() -> bool {
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))
         .unwrap_or_else(|| PathBuf::from("."));
 
-    // апдейтер сам себя обновить не может пока работает поэтому новую версию кладёт рядом как updater.exe.new
-    // только лаунчер апдейтер в этот момент точно дохлый может её накатить
     let updater_new = dir.join("updater.exe.new");
     if updater_new.exists() {
         let updater_path = dir.join("updater.exe");
