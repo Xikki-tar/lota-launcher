@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the updater window",
-  "windows": ["main"],
+  "windows": ["lota-launcher"],
   "permissions": [
     "core:default"
   ]

@@ -10,12 +10,14 @@
     "withGlobalTauri": true,
     "windows": [
       {
+        "label": "lota-launcher",
         "title": "LOTA Launcher",
         "width": 420,
         "height": 200,
         "resizable": false,
         "center": true,
-        "decorations": true
+        "decorations": true,
+        "dataDirectory": "webview-updater"
       }
     ],
     "security": {

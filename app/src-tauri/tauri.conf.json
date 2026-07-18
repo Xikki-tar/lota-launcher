@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "lota-launcher",
         "title": "Lota Launcher",
         "width": 1100,
         "height": 700,
@@ -19,7 +20,8 @@
         "minHeight": 600,
         "decorations": false,
         "resizable": true,
-        "center": true
+        "center": true,
+        "dataDirectory": "webview"
       }
     ],
     "security": {
