@@ -12,7 +12,7 @@ jobs:
     permissions:
       contents: write
     env:
-      RUSTFLAGS: -C target-feature=+crt-static
+      STATIC_VCRUNTIME: "true"
 
     steps:
       - name: Checkout
@@ -60,7 +60,9 @@ jobs:
           --specpath build/windows
 
       - name: Build updater.exe
-        run: cargo build --release --manifest-path updater/src-tauri/Cargo.toml
+        run: |
+          cargo clean --release --manifest-path updater/src-tauri/Cargo.toml -p updater
+          cargo build --release --manifest-path updater/src-tauri/Cargo.toml
 
       - name: Place backend and updater as Tauri sidecars
         shell: bash

@@ -60,6 +60,9 @@ jobs:
             sha256sum "$f" > "$f.sha256"
           done
 
+      - name: Copy icon
+        run: cp app/src-tauri/icons/128x128.png app/src-tauri/target/release/bundle/appimage/lota-launcher-icon.png
+
       - name: Upload AppImage
         uses: actions/upload-artifact@v4
         with:
@@ -67,6 +70,7 @@ jobs:
           path: |
             app/src-tauri/target/release/bundle/appimage/*.AppImage
             app/src-tauri/target/release/bundle/appimage/*.sha256
+            app/src-tauri/target/release/bundle/appimage/lota-launcher-icon.png
 
       - name: Publish to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -75,3 +79,4 @@ jobs:
           files: |
             app/src-tauri/target/release/bundle/appimage/*.AppImage
             app/src-tauri/target/release/bundle/appimage/*.sha256
+            app/src-tauri/target/release/bundle/appimage/lota-launcher-icon.png
