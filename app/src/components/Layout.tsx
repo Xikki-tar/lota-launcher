@@ -106,6 +106,7 @@ export default function Layout({ onLogout }: LayoutProps) {
   const [playBusy, setPlayBusy] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const prevPlayStateRef = useRef<string>("idle");
 
   const [pageAnim, setPageAnim] = useState<"enter" | "exit" | "">( "enter");
   const [sidebarAnim, setSidebarAnim] = useState<"enter" | "exit" | "">("enter");
@@ -160,6 +161,16 @@ export default function Layout({ onLogout }: LayoutProps) {
     try {
       const data = await apiGet<PlayState>(port, "/play/state", 0);
       if (!data || typeof data !== "object") return;
+
+      const newState = data.state ?? "idle";
+      const prevState = prevPlayStateRef.current;
+      if (newState === "launched" && prevState !== "launched") {
+        win.hide().catch(() => {});
+      } else if (prevState === "launched" && newState !== "launched") {
+        win.show().catch(() => {});
+      }
+      prevPlayStateRef.current = newState;
+
       setPlayState(data);
       setPlayBusy(false);
     } catch { /* ignore */ }

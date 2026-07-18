@@ -5,6 +5,7 @@ use tauri::AppHandle;
 #[tauri::command]
 pub fn apply_update(app: AppHandle, path: String) -> Result<(), String> {
     Command::new(&path).spawn().map_err(|e| e.to_string())?;
+    crate::commands::backend::kill_backend();
     app.exit(0);
     Ok(())
 }
@@ -29,6 +30,7 @@ pub fn restart_to_updater(app: AppHandle) -> Result<(), String> {
         }
     }
 
+    crate::commands::backend::kill_backend();
     app.exit(0);
     Ok(())
 }

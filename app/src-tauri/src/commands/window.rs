@@ -2,9 +2,8 @@ use tauri::{AppHandle, Manager};
 
 #[tauri::command]
 pub fn close_window(app: AppHandle) {
-    if let Some(win) = app.get_webview_window("lota-launcher") {
-        let _ = win.close();
-    }
+    crate::commands::backend::kill_backend();
+    app.exit(0);
 }
 
 #[tauri::command]
@@ -23,5 +22,20 @@ pub fn toggle_maximize(app: AppHandle) {
         } else {
             let _ = win.maximize();
         }
+    }
+}
+
+#[tauri::command]
+pub fn hide_window(app: AppHandle) {
+    if let Some(win) = app.get_webview_window("lota-launcher") {
+        let _ = win.hide();
+    }
+}
+
+#[tauri::command]
+pub fn show_window(app: AppHandle) {
+    if let Some(win) = app.get_webview_window("lota-launcher") {
+        let _ = win.show();
+        let _ = win.set_focus();
     }
 }

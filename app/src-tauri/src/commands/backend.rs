@@ -48,3 +48,11 @@ pub async fn backend_start(app: AppHandle) -> Result<u16, String> {
 pub fn backend_port() -> Option<u16> {
     BACKEND.lock().unwrap().port
 }
+
+pub fn kill_backend() {
+    let mut state = BACKEND.lock().unwrap();
+    if let Some(child) = state.child.take() {
+        let _ = child.kill();
+    }
+    state.port = None;
+}

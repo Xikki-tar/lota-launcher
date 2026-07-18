@@ -11,6 +11,8 @@ pub fn run() {
             commands::window::close_window,
             commands::window::minimize_window,
             commands::window::toggle_maximize,
+            commands::window::hide_window,
+            commands::window::show_window,
             commands::auth::auth_load,
             commands::auth::auth_save,
             commands::auth::auth_clear,
