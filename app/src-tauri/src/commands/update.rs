@@ -2,6 +2,25 @@ use std::process::Command;
 use std::time::Duration;
 use tauri::AppHandle;
 
+#[cfg(target_os = "windows")]
+fn windows_launcher_version_file() -> Option<String> {
+    let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let v = std::fs::read_to_string(dir.join("launcher.version")).ok()?;
+    let v = v.trim().to_string();
+    if v.is_empty() { None } else { Some(v) }
+}
+
+#[tauri::command]
+pub fn get_display_version(app: AppHandle) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(v) = windows_launcher_version_file() {
+            return v;
+        }
+    }
+    app.package_info().version.to_string()
+}
+
 #[tauri::command]
 pub fn apply_update(app: AppHandle, path: String) -> Result<(), String> {
     Command::new(&path).spawn().map_err(|e| e.to_string())?;

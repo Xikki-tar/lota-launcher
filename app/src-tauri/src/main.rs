@@ -5,10 +5,24 @@
 // не запущен из того файла, который меняем если updater.exe не нашёлся или
 // обосрался при запуске похуй не блокируем юзера работаем как обычно
 #[cfg(target_os = "windows")]
+fn windows_cleanup_stray_appdata_dirs() {
+    use std::path::PathBuf;
+
+    let Ok(local_appdata) = std::env::var("LOCALAPPDATA") else {
+        return;
+    };
+    for name in ["com.lota.launcher", "com.lota.launcher.updater"] {
+        let _ = std::fs::remove_dir_all(PathBuf::from(&local_appdata).join(name));
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn windows_updater_bootstrap() -> bool {
     use std::path::PathBuf;
     use std::process::Command;
     use std::time::Duration;
+
+    windows_cleanup_stray_appdata_dirs();
 
     if std::env::args().any(|a| a == "--skip-updater") {
         return false;

@@ -27,6 +27,7 @@ pub fn run() {
             commands::backend::backend_port,
             commands::update::apply_update,
             commands::update::restart_to_updater,
+            commands::update::get_display_version,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

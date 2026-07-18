@@ -32,9 +32,11 @@ export default function App() {
   const [state, setState] = useState<AppState>("loading");
   const [backendPort, setBackendPort] = useState<number | null>(null);
   const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
+  const [displayVersion, setDisplayVersion] = useState("");
 
   useEffect(() => {
     initApp();
+    invoke<string>("get_display_version").then(setDisplayVersion).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -66,7 +68,7 @@ export default function App() {
   if (state === "loading") {
     return (
       <div className="app">
-        <TitleBar version="v0.1.0" />
+        <TitleBar version={displayVersion ? `v${displayVersion}` : undefined} />
         <div className="splash"><LoadingDots label="Загрузка" /></div>
       </div>
     );
@@ -77,7 +79,7 @@ export default function App() {
       <I18nProvider>
       <HashRouter>
         <div className="app">
-          <TitleBar version="v0.1.0" />
+          <TitleBar version={displayVersion ? `v${displayVersion}` : undefined} />
           <div className="content">
             <ErrorBoundary>
             <Routes>

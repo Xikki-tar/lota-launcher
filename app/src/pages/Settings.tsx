@@ -42,6 +42,7 @@ export default function Settings() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [appVersion, setAppVersion] = useState("");
+  const [displayVersion, setDisplayVersion] = useState("");
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateMode, setUpdateMode] = useState<UpdateMode>(null);
   const [updateNote, setUpdateNote] = useState("");
@@ -49,6 +50,7 @@ export default function Settings() {
 
   useEffect(() => { load(); }, [port]);
   useEffect(() => { getVersion().then(setAppVersion).catch(() => {}); }, []);
+  useEffect(() => { invoke<string>("get_display_version").then(setDisplayVersion).catch(() => {}); }, []);
 
   // тихая проверка режима апдейта (и заодно наличия обновления для appimage) при заходе в настройки
   useEffect(() => {
@@ -304,7 +306,7 @@ export default function Settings() {
                 <fieldset className={styles.group}>
                   <legend className={styles.groupTitle}>{t("settings_group_updates", "Обновления")}</legend>
                   <div className={styles.caption}>
-                    {t("update_current_version", "Текущая версия:")} {appVersion || "—"}
+                    {t("update_current_version", "Текущая версия:")} {displayVersion || appVersion || "—"}
                   </div>
                   {updateNote && <div className={styles.caption}>{updateNote}</div>}
                   <div className={styles.pathBtns}>
@@ -319,7 +321,7 @@ export default function Settings() {
                 <fieldset className={styles.group}>
                   <legend className={styles.groupTitle}>{t("settings_group_updates", "Обновления")}</legend>
                   <div className={styles.caption}>
-                    {t("update_current_version", "Текущая версия:")} {appVersion || "—"}
+                    {t("update_current_version", "Текущая версия:")} {displayVersion || appVersion || "—"}
                   </div>
                   {updateNote && <div className={styles.caption}>{updateNote}</div>}
                   <div className={styles.pathBtns}>
