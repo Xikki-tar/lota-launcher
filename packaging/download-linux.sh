@@ -91,11 +91,14 @@ do_install() {
   mkdir -p "$RUNTIME_DIR"
 
   echo "-> Downloading launcher..."
-  if ! curl -fL --progress-bar -o "$APPIMAGE_PATH" "$APPIMAGE_URL"; then
+  TMP_APPIMAGE="$RUNTIME_DIR/.lota-launcher.AppImage.tmp.$$"
+  if ! curl -fL --progress-bar -o "$TMP_APPIMAGE" "$APPIMAGE_URL"; then
     echo "Download failed." >&2
+    rm -f "$TMP_APPIMAGE"
     return 1
   fi
-  chmod +x "$APPIMAGE_PATH"
+  chmod +x "$TMP_APPIMAGE"
+  mv -f "$TMP_APPIMAGE" "$APPIMAGE_PATH"
 
   if [ -n "$ICON_URL" ]; then
     curl -fsSL -o "$ICON_PATH" "$ICON_URL" || true
