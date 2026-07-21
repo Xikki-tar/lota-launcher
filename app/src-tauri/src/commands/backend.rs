@@ -1,4 +1,5 @@
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri::AppHandle;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
@@ -55,4 +56,24 @@ pub fn kill_backend() {
         let _ = child.kill();
     }
     state.port = None;
+}
+
+pub async fn has_active_downloads() -> bool {
+    let port = BACKEND.lock().unwrap().port;
+    let Some(port) = port else { return false };
+    let url = format!("http://127.0.0.1:{}/tasks/active_downloads", port);
+    let resp = reqwest::Client::new()
+        .get(&url)
+        .timeout(Duration::from_secs(3))
+        .send()
+        .await;
+    match resp {
+        Ok(r) => r
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|v| v.get("active").and_then(|a| a.as_bool()))
+            .unwrap_or(false),
+        Err(_) => false,
+    }
 }

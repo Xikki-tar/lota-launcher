@@ -113,8 +113,6 @@ class _LogWriter(io.TextIOBase):
 
 sys.stdout = _LogWriter(sys.__stdout__, "")
 sys.stderr = _LogWriter(sys.__stderr__, "[ERR] ")
-
-# werkzeug не должен логировать частые поллинг-ендпоинты иначе дебаг консоль зациклится
 import logging as _logging
 
 class _WerkzeugFilter(_logging.Filter):
@@ -130,11 +128,11 @@ _tasks: dict[str, dict] = {}
 _tasks_lock = threading.Lock()
 
 
-def _new_task() -> str:
+def _new_task(kind: str = "generic") -> str:
     import uuid
     task_id = str(uuid.uuid4())[:8]
     with _tasks_lock:
-        _tasks[task_id] = {"state": "running", "progress": 0, "error": None, "result": None}
+        _tasks[task_id] = {"state": "running", "progress": 0, "error": None, "result": None, "kind": kind}
     return task_id
 
 
@@ -591,7 +589,7 @@ def library_download():
         source_id = item.get("_source_build_id")
         source_item = next((b for b in catalog.builds if not b.get("is_instance") and b.get("id") == source_id), None)
 
-    task_id = _new_task()
+    task_id = _new_task(kind="download")
 
     def run():
         try:
@@ -721,8 +719,25 @@ def task_status(task_id: str):
     return jsonify(task)
 
 
+@app.get("/tasks/active_downloads")
+def tasks_active_downloads():
+    with _tasks_lock:
+        count = sum(1 for t in _tasks.values() if t.get("kind") == "download" and t.get("state") == "running")
+    return jsonify({"active": count > 0, "count": count})
+
+
 _play_state: dict = {"state": "idle", "status": "", "error": None}
 _play_lock = threading.Lock()
+
+_MOD_FAILURE_MARKERS = (
+    "---- Minecraft Crash Report ----",
+    "ModLoadingException",
+    "net.minecraftforge.fml.ModLoadingException",
+    "net.fabricmc.loader.impl.FormattedException",
+    "Mod Loading Errors have occurred",
+    "missing or unsupported mandatory dependencies",
+    "DuplicateModsFoundException",
+)
 
 
 @app.get("/play/state")
@@ -782,45 +797,75 @@ def play_start():
             if not game_dir.is_dir():
                 game_dir = get_data_dir() / "minecraft"
 
-            shared_game_dir = get_data_dir() / "minecraft"
-            versions_dir = shared_game_dir / "versions"
-            version_id = ensure_forge_version(versions_dir, java_path, shared_game_dir, status=set_status)
-            prepared = prepare_version(version_id, progress=set_progress, status=set_status)
+            bundle_state = service.prepare_bundle_files(game_dir)
+            try:
+                shared_game_dir = get_data_dir() / "minecraft"
+                versions_dir = shared_game_dir / "versions"
+                version_id = ensure_forge_version(versions_dir, java_path, shared_game_dir, status=set_status)
+                prepared = prepare_version(version_id, progress=set_progress, status=set_status)
 
-            auth = load_auth_data() or {}
-            username = str(settings.get("offline_username") or auth.get("username") or "Player")
+                auth = load_auth_data() or {}
+                username = str(settings.get("offline_username") or auth.get("username") or "Player")
 
-            mem_min = int(settings.get("mem_min_mb") or 1024)
-            mem_max = int(settings.get("mem_max_mb") or 4096)
-            jvm_args = str(settings.get("jvm_args") or "")
+                mem_min = int(settings.get("mem_min_mb") or 1024)
+                mem_max = int(settings.get("mem_max_mb") or 4096)
+                jvm_args = str(settings.get("jvm_args") or "")
 
-            spec = build_launch_spec(
-                prepared=prepared,
-                username=username,
-                java_path=java_path,
-                mem_min_mb=mem_min,
-                mem_max_mb=mem_max,
-                jvm_args=jvm_args,
-                game_dir_override=game_dir,
-            )
+                spec = build_launch_spec(
+                    prepared=prepared,
+                    username=username,
+                    java_path=java_path,
+                    mem_min_mb=mem_min,
+                    mem_max_mb=mem_max,
+                    jvm_args=jvm_args,
+                    game_dir_override=game_dir,
+                )
 
-            import subprocess
-            proc = subprocess.Popen(
-                spec.argv, cwd=spec.cwd,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, encoding="utf-8", errors="replace",
-            )
+                import subprocess
+                proc = subprocess.Popen(
+                    spec.argv, cwd=spec.cwd,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, encoding="utf-8", errors="replace",
+                )
+                with _play_lock:
+                    _play_state.update({"state": "launched", "status": "Игра запущена", "pid": proc.pid, "_proc": proc, "mod_error": None})
+
+                log_path = get_data_dir() / "logs" / f"minecraft_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+
+                def _pipe_mc_logs():
+                    with log_path.open("w", encoding="utf-8") as log_file:
+                        for line in proc.stdout:
+                            clean = line.rstrip()
+                            _log_append("[MC] " + clean)
+                            log_file.write(clean + "\n")
+                            log_file.flush()
+                            if any(marker in clean for marker in _MOD_FAILURE_MARKERS):
+                                with _play_lock:
+                                    if not _play_state.get("mod_error"):
+                                        _play_state["mod_error"] = clean
+
+                log_thread = threading.Thread(target=_pipe_mc_logs, daemon=True)
+                log_thread.start()
+
+                proc.wait()
+                log_thread.join(timeout=5)
+            finally:
+                service.cleanup_bundle_files(bundle_state)
+
             with _play_lock:
-                _play_state.update({"state": "launched", "status": "Игра запущена", "pid": proc.pid, "_proc": proc})
-
-            def _pipe_mc_logs():
-                for line in proc.stdout:
-                    _log_append("[MC] " + line.rstrip())
-            threading.Thread(target=_pipe_mc_logs, daemon=True).start()
-
-            proc.wait()
-            with _play_lock:
-                _play_state.update({"state": "idle", "status": "", "pid": None, "_proc": None})
+                mod_error = _play_state.get("mod_error")
+            if proc.returncode != 0:
+                _log_append(f"[MC] process exited with code {proc.returncode}")
+                error_msg = mod_error or f"Minecraft завершился с кодом {proc.returncode}"
+                with _play_lock:
+                    _play_state.update({
+                        "state": "error", "status": "", "pid": None, "_proc": None,
+                        "error": error_msg, "log_path": str(log_path),
+                    })
+            else:
+                with _play_lock:
+                    _play_state.update({"state": "idle", "status": "", "pid": None, "_proc": None, "log_path": str(log_path)})
 
         except Exception as exc:
             with _play_lock:
