@@ -1325,9 +1325,8 @@ if __name__ == "__main__":
     port_file = pathlib.Path(args.port_file) if args.port_file else pathlib.Path(__file__).parent / ".dev-port"
     port_file.write_text(str(port))
 
-    # tauri читает PORT:xxxx из stdout
     print(f"PORT:{port}", flush=True)
-    _install_desktop_entry_if_appimage()
+    threading.Thread(target=_install_desktop_entry_if_appimage, daemon=True).start()
     try:
         app.run(host="127.0.0.1", port=port, threaded=True)
     finally:

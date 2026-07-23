@@ -37,12 +37,31 @@ pub async fn backend_start(app: AppHandle) -> Result<u16, String> {
         }
     }
     let port = port.ok_or("Bad port line")?;
+    wait_for_backend_ready(port).await;
 
     let mut state = BACKEND.lock().unwrap();
     state.port = Some(port);
     state.child = Some(child);
 
     Ok(port)
+}
+
+async fn wait_for_backend_ready(port: u16) {
+    let client = reqwest::Client::new();
+    let url = format!("http://127.0.0.1:{}/settings", port);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let ok = client
+            .get(&url)
+            .timeout(Duration::from_secs(1))
+            .send()
+            .await
+            .is_ok();
+        if ok || std::time::Instant::now() >= deadline {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 #[tauri::command]
