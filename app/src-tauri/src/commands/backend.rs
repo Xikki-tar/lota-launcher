@@ -20,10 +20,12 @@ pub async fn backend_start(app: AppHandle) -> Result<u16, String> {
         return Ok(port);
     }
 
+    let data_dir = crate::store::get_config_dir();
     let (mut rx, child) = app
         .shell()
         .sidecar("backend")
         .map_err(|e| e.to_string())?
+        .env("LOTA_LAUNCHER_HOME", data_dir.to_string_lossy().to_string())
         .spawn()
         .map_err(|e| format!("Failed to start backend: {}", e))?;
 

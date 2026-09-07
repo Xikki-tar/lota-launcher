@@ -71,9 +71,27 @@ def _preflight():
     if request.method == "OPTIONS":
         return Response(status=200)
 
+
+_ACTION_LOG_SKIP = ("/play/state", "/debug/logs", "/tasks/active_downloads", "/task/")
+
+
+@app.before_request
+def _log_action():
+    if request.method == "OPTIONS":
+        return
+    path = request.path
+    if any(path.startswith(prefix) for prefix in _ACTION_LOG_SKIP):
+        return
+    print(f"[action] {request.method} {path}", flush=True)
+
 _log_lines: list[str] = []
 _log_lock = threading.Lock()
 _LOG_MAX = 2000
+
+try:
+    _log_file = (get_data_dir() / "launcher.log").open("a", encoding="utf-8")
+except Exception:
+    _log_file = None
 
 
 def _log_append(line: str) -> None:
@@ -81,6 +99,12 @@ def _log_append(line: str) -> None:
         _log_lines.append(line)
         if len(_log_lines) > _LOG_MAX:
             del _log_lines[:len(_log_lines) - _LOG_MAX]
+        if _log_file is not None:
+            try:
+                _log_file.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {line}\n")
+                _log_file.flush()
+            except Exception:
+                pass
 
 
 class _LogWriter(io.TextIOBase):
@@ -329,6 +353,7 @@ def update_install():
 
     target_path = _appimage_path() if mode == "appimage" else _macos_app_bundle_path()
     task_id = _new_task()
+    print(f"[update] install start: version={version} mode={mode}", flush=True)
 
     def run():
         tmp_path: Path | None = None
@@ -371,10 +396,12 @@ def update_install():
 
             _task_progress(task_id, 100)
             _task_done(task_id, result={"relaunch_path": relaunch_path, "version": version})
+            print(f"[update] install done: version={version}", flush=True)
         except Exception as exc:
             if tmp_path is not None:
                 tmp_path.unlink(missing_ok=True)
             _task_done(task_id, error=str(exc))
+            print(f"[update] install failed: version={version}: {exc}", flush=True)
 
     threading.Thread(target=run, daemon=True).start()
     return jsonify({"ok": True, "task_id": task_id})
@@ -444,20 +471,28 @@ def java_scan():
 def _proxy_post(path: str, body: dict) -> tuple[dict, int]:
     try:
         base = get_api_base()
+    except Exception as e:
+        print(f"[backend] proxy POST {path} failed: no api base resolved: {type(e).__name__}: {e}", flush=True)
+        return {"ok": False, "error": "conn_refused", "detail": str(e)}, 0
+    try:
         r = http.post(f"{base}{path}", json=body, timeout=15)
         return r.json() if r.content else {}, r.status_code
     except Exception as e:
-        print(f"[backend] proxy POST {path} failed: {e}", flush=True)
+        print(f"[backend] proxy POST {base}{path} failed: {type(e).__name__}: {e}", flush=True)
         return {"ok": False, "error": "conn_refused", "detail": str(e)}, 0
 
 
 def _proxy_get(path: str, params: dict) -> tuple[dict, int]:
     try:
         base = get_api_base()
+    except Exception as e:
+        print(f"[backend] proxy GET {path} failed: no api base resolved: {type(e).__name__}: {e}", flush=True)
+        return {"ok": False, "error": "conn_refused", "detail": str(e)}, 0
+    try:
         r = http.get(f"{base}{path}", params=params, timeout=10)
         return r.json() if r.content else {}, r.status_code
     except Exception as e:
-        print(f"[backend] proxy GET {path} failed: {e}", flush=True)
+        print(f"[backend] proxy GET {base}{path} failed: {type(e).__name__}: {e}", flush=True)
         return {"ok": False, "error": "conn_refused", "detail": str(e)}, 0
 
 
@@ -590,6 +625,7 @@ def library_download():
         source_item = next((b for b in catalog.builds if not b.get("is_instance") and b.get("id") == source_id), None)
 
     task_id = _new_task(kind="download")
+    print(f"[library] download start: build_key={build_key}", flush=True)
 
     def run():
         try:
@@ -620,7 +656,9 @@ def library_download():
             lib.install_or_update_build(item, archive_path, source_item=source_item)
             _task_progress(task_id, 100)
             _task_done(task_id)
+            print(f"[library] download done: build_key={build_key}", flush=True)
         except Exception as exc:
+            print(f"[library] download failed: build_key={build_key}: {exc}", flush=True)
             _task_done(task_id, str(exc))
 
     threading.Thread(target=run, daemon=True).start()
@@ -639,6 +677,7 @@ def library_delete():
     if not item:
         return jsonify({"ok": False, "error": "build_not_found"}), 404
     lib.delete_build_files(item)
+    print(f"[library] build deleted: build_key={build_key}", flush=True)
     settings = load_settings()
     if settings.get("selected_build") == build_key:
         settings["selected_build"] = ""
@@ -780,11 +819,14 @@ def play_start():
             if not build_key:
                 with _play_lock:
                     _play_state.update({"state": "error", "error": "Нет доступных сборок"})
+                print("[play] no builds available", flush=True)
                 return
+            print(f"[play] build selected: {build_key}", flush=True)
 
             java_path = service.ensure_oracle_java_21(status=set_status, progress=set_progress)
             if not java_path:
                 java_path = str(settings.get("java_path") or "")
+            print(f"[play] java_path: {java_path}", flush=True)
 
             set_status("Запуск...")
 
@@ -827,6 +869,7 @@ def play_start():
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, encoding="utf-8", errors="replace",
                 )
+                print(f"[play] process launched, pid={proc.pid}", flush=True)
                 with _play_lock:
                     _play_state.update({"state": "launched", "status": "Игра запущена", "pid": proc.pid, "_proc": proc, "mod_error": None})
 
@@ -858,16 +901,19 @@ def play_start():
             if proc.returncode != 0:
                 _log_append(f"[MC] process exited with code {proc.returncode}")
                 error_msg = mod_error or f"Minecraft завершился с кодом {proc.returncode}"
+                print(f"[play] process exited with code {proc.returncode}: {error_msg}", flush=True)
                 with _play_lock:
                     _play_state.update({
                         "state": "error", "status": "", "pid": None, "_proc": None,
                         "error": error_msg, "log_path": str(log_path),
                     })
             else:
+                print("[play] process exited normally", flush=True)
                 with _play_lock:
                     _play_state.update({"state": "idle", "status": "", "pid": None, "_proc": None, "log_path": str(log_path)})
 
         except Exception as exc:
+            print(f"[play] launch failed: {exc}", flush=True)
             with _play_lock:
                 _play_state.update({"state": "error", "error": str(exc)})
 
@@ -883,8 +929,9 @@ def play_stop():
     if proc is not None and state == "launched":
         try:
             proc.terminate()
-        except Exception:
-            pass
+            print(f"[play] process terminated, pid={proc.pid}", flush=True)
+        except Exception as exc:
+            print(f"[play] terminate failed: {exc}", flush=True)
     return jsonify({"ok": True})
 
 

@@ -21,16 +21,7 @@ fn home_dir() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("/tmp"))
 }
 
-pub fn get_config_dir() -> PathBuf {
-    if let Ok(v) = std::env::var("LOTA_LAUNCHER_HOME") {
-        let v = v.trim().to_string();
-        if !v.is_empty() {
-            let p = PathBuf::from(v);
-            let _ = fs::create_dir_all(&p);
-            return p;
-        }
-    }
-
+fn default_config_dir() -> PathBuf {
     let home = home_dir();
 
     #[cfg(target_os = "windows")]
@@ -46,8 +37,70 @@ pub fn get_config_dir() -> PathBuf {
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     let dir = home.join(".local").join("share").join(APP_DIR_NAME);
 
+    dir
+}
+
+pub fn get_config_dir() -> PathBuf {
+    if let Ok(v) = std::env::var("LOTA_LAUNCHER_HOME") {
+        let v = v.trim().to_string();
+        if !v.is_empty() {
+            let p = PathBuf::from(v);
+            let _ = fs::create_dir_all(&p);
+            return p;
+        }
+    }
+
+    let dir = default_config_dir();
     let _ = fs::create_dir_all(&dir);
     dir
+}
+
+#[cfg(target_os = "windows")]
+fn install_root_data_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let runtime_dir = exe.parent()?;
+    if !runtime_dir.file_name()?.to_str()?.eq_ignore_ascii_case("runtime") {
+        return None;
+    }
+    let install_root = runtime_dir.parent()?;
+    if !install_root.file_name()?.to_str()?.eq_ignore_ascii_case(APP_DIR_NAME) {
+        return None;
+    }
+    Some(install_root.join("data"))
+}
+
+fn copy_dir_merge(src: &Path, dst: &Path) {
+    let Ok(entries) = fs::read_dir(src) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let target = dst.join(entry.file_name());
+        if path.is_dir() {
+            let _ = fs::create_dir_all(&target);
+            copy_dir_merge(&path, &target);
+        } else if !target.exists() {
+            let _ = fs::copy(&path, &target);
+        }
+    }
+}
+
+pub fn init_data_dir() {
+    if let Ok(v) = std::env::var("LOTA_LAUNCHER_HOME") {
+        if !v.trim().is_empty() {
+            return;
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let Some(new_dir) = install_root_data_dir() else { return };
+        let legacy_dir = default_config_dir();
+        let _ = fs::create_dir_all(&new_dir);
+        if legacy_dir != new_dir && legacy_dir.is_dir() {
+            copy_dir_merge(&legacy_dir, &new_dir);
+            let _ = fs::remove_dir_all(&legacy_dir);
+        }
+        std::env::set_var("LOTA_LAUNCHER_HOME", &new_dir);
+    }
 }
 
 fn config_file() -> PathBuf {

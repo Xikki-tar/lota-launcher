@@ -62,10 +62,17 @@ def get_api_candidates() -> list[str]:
 
 def _probe_candidate(base_url: str, timeout: float) -> tuple[str, float]:
     started = time.perf_counter()
-    response = requests.get(f"{base_url}/ping", timeout=timeout)
+    try:
+        response = requests.get(f"{base_url}/ping", timeout=timeout)
+    except Exception as exc:
+        print(f"[api] probe {base_url} failed: {type(exc).__name__}: {exc}", flush=True)
+        raise
+    elapsed = time.perf_counter() - started
     if response.status_code != 200:
+        print(f"[api] probe {base_url} bad status: HTTP {response.status_code} ({elapsed * 1000:.0f}ms)", flush=True)
         raise RuntimeError(f"HTTP {response.status_code}")
-    return base_url, time.perf_counter() - started
+    print(f"[api] probe {base_url} ok: {elapsed * 1000:.0f}ms", flush=True)
+    return base_url, elapsed
 
 
 def resolve_fastest_api_base(*, force_refresh: bool = False, timeout: float = DEFAULT_PROBE_TIMEOUT) -> str:
@@ -78,6 +85,7 @@ def resolve_fastest_api_base(*, force_refresh: bool = False, timeout: float = DE
 
     candidates = get_api_candidates()
     if not candidates:
+        print("[api] no API base candidates configured", flush=True)
         raise RuntimeError("No API base candidates configured")
     if len(candidates) == 1:
         winner = candidates[0]
@@ -86,6 +94,7 @@ def resolve_fastest_api_base(*, force_refresh: bool = False, timeout: float = DE
             _api_base_cache_until = time.monotonic() + DEFAULT_CACHE_TTL_SECONDS
         return winner
 
+    print(f"[api] resolving fastest of {len(candidates)} candidates: {candidates}", flush=True)
     best_url = ""
     best_latency = None
     errors: list[str] = []
@@ -107,8 +116,10 @@ def resolve_fastest_api_base(*, force_refresh: bool = False, timeout: float = DE
                 best_latency = latency
 
     if not best_url:
+        print(f"[api] all candidates failed: {'; '.join(errors)}", flush=True)
         raise RuntimeError("All API candidates failed: " + "; ".join(errors))
 
+    print(f"[api] resolved {best_url} ({best_latency * 1000:.0f}ms)", flush=True)
     with _api_base_cache_lock:
         _api_base_cache_value = best_url
         _api_base_cache_until = time.monotonic() + DEFAULT_CACHE_TTL_SECONDS
