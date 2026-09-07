@@ -3,6 +3,8 @@ import { useOutletContext } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useBackend, apiGet, apiPost, apiDelete, invalidateCache } from "../lib/BackendContext";
 import { useI18n } from "../lib/I18nContext";
+import { type Localized, langCode, loc } from "../lib/localized";
+import { trackTask, isTracking, useProgress } from "../lib/progressStore";
 import type { PageContext } from "../components/Layout";
 import LoadingDots from "../components/LoadingDots";
 import styles from "./Library.module.css";
@@ -11,7 +13,7 @@ interface Build {
   id: number | string;
   name?: string;
   version?: string;
-  description?: string;
+  description?: string | Localized;
   image?: string;
   is_instance?: boolean;
   _source_build_id?: number;
@@ -37,14 +39,15 @@ interface OverlayProps {
 }
 
 function InstanceOverlay({ mode, instance, builds, port, onClose, onSaved }: OverlayProps) {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
+  const lang = langCode(language);
   const [visible, setVisible] = useState(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const sourceBuilds = builds.filter(b => !b.is_instance);
 
   const [name, setName]   = useState(instance?.name ?? "");
-  const [desc, setDesc]   = useState(instance?.description ?? "");
+  const [desc, setDesc]   = useState(loc(instance?.description, lang));
   const [image, setImage] = useState(instance?.image ?? "");
   const [buildIdx, setBuildIdx] = useState(0);
   const [busy, setBusy]   = useState(false);
@@ -66,7 +69,7 @@ function InstanceOverlay({ mode, instance, builds, port, onClose, onSaved }: Ove
     const src = sourceBuilds[buildIdx];
     if (!src) return;
     if (!nameDirty.current)  setName(src.name ?? "");
-    if (!descDirty.current)  setDesc(src.description ?? "");
+    if (!descDirty.current)  setDesc(loc(src.description, lang));
     if (!imageDirty.current && src.image) setImage(src.image);
   }, [buildIdx]);
 
@@ -197,7 +200,34 @@ function InstanceOverlay({ mode, instance, builds, port, onClose, onSaved }: Ove
   );
 }
 
+function BuildListItem({ build, isActive, isSelected, isDeleting, onClick }: {
+  build: Build;
+  isActive: boolean;
+  isSelected: boolean;
+  isDeleting: boolean;
+  onClick: () => void;
+}) {
+  const dlPct = useProgress(build._build_key);
+  return (
+    <button
+      className={`${styles.buildItem} ${isActive ? styles.buildItemActive : ""} ${isSelected ? styles.buildItemSelected : ""}`}
+      onClick={onClick}
+    >
+      <div className={styles.buildItemName}>{build.name || `Сборка #${build.id}`}</div>
+      {build.version && <div className={styles.buildItemMeta}>{build.version}</div>}
+      {dlPct !== undefined && (
+        <div className={styles.buildItemBar}>
+          <div className={styles.buildItemFill} style={{ width: `${dlPct}%` }} />
+        </div>
+      )}
+      {isDeleting && <div className={styles.buildItemMeta}>Удаление...</div>}
+    </button>
+  );
+}
+
 function InfoCard({ build, port }: { build: Build; port: number | null }) {
+  const { language } = useI18n();
+  const description = loc(build.description, langCode(language));
   const imgSrc = build.image && port
     ? `http://127.0.0.1:${port}/library/image?path=${encodeURIComponent(build.image)}`
     : null;
@@ -206,7 +236,7 @@ function InfoCard({ build, port }: { build: Build; port: number | null }) {
     <div className={styles.infoCard}>
       <div className={styles.infoTitle}>{build.name || `Сборка #${build.id}`}</div>
       {build.version && <div className={styles.infoMeta}>{build.version}</div>}
-      {build.description && <div className={styles.infoBody}>{build.description}</div>}
+      {description && <div className={styles.infoBody}>{description}</div>}
       {imgSrc && (
         <div className={styles.infoImageWrap}>
           <img src={imgSrc} alt="" className={styles.infoImage} />
@@ -224,14 +254,12 @@ export default function Library() {
   const [selectedKey, setSelectedKey] = useState("");
   const [activeBuild, setActiveBuild] = useState<Build | null>(null); // что показываем в инфопанели, не то что выбрано для запуска
   const [loading, setLoading] = useState(true);
-  const [downloading, setDownloading] = useState<Record<string, number>>({});
   const [deleting, setDeleting] = useState<Record<string, boolean>>({});
   const [overlay, setOverlay] = useState<OverlayState | null>(null);
-  const pollRefs = useRef<Record<string, ReturnType<typeof setInterval>>>({});
+  const activeDlPct = useProgress(activeBuild?._build_key ?? null);
 
   useEffect(() => {
     loadCatalog();
-    return () => { Object.values(pollRefs.current).forEach(clearInterval); };
   }, [port]);
 
   async function loadCatalog() {
@@ -258,28 +286,24 @@ export default function Library() {
     } catch { /* ignore */ }
   }
 
-  async function handleDownload(buildKey: string) {
-    try {
-      const res = await apiPost<{ ok: boolean; task_id?: string }>(port, "/library/download", { build_key: buildKey });
-      if (res.ok && res.task_id) {
-        setDownloading(prev => ({ ...prev, [buildKey]: 0 }));
-        pollRefs.current[buildKey] = setInterval(() => pollTask(buildKey, res.task_id!), 800);
+  function handleDownload(buildKey: string) {
+    if (isTracking(buildKey)) return;
+    let taskId: string | null = null;
+    let startAttempts = 0;
+    trackTask(buildKey, async () => {
+      if (!taskId) {
+        startAttempts++;
+        try {
+          const res = await apiPost<{ ok: boolean; task_id?: string }>(port, "/library/download", { build_key: buildKey });
+          if (res.ok && res.task_id) { taskId = res.task_id; return { started: true }; }
+        } catch { /* ignore */ }
+        if (startAttempts >= 5) return { state: "error", error: "download_start_failed" };
+        return {};
       }
-    } catch { /* ignore */ }
-  }
-
-  async function pollTask(buildKey: string, taskId: string) {
-    try {
-      const t = await apiGet<TaskStatus>(port, `/task/${taskId}`, 0);
-      setDownloading(prev => ({ ...prev, [buildKey]: t.progress ?? 0 }));
-      if (t.state === "done" || t.state === "error") {
-        clearInterval(pollRefs.current[buildKey]);
-        delete pollRefs.current[buildKey];
-        setDownloading(prev => { const n = { ...prev }; delete n[buildKey]; return n; });
-        invalidateCache("/library/catalog");
-        await loadCatalog();
-      }
-    } catch { /* ignore */ }
+      return await apiGet<TaskStatus>(port, `/task/${taskId}`, 0);
+    }, {
+      onDone: () => { invalidateCache("/library/catalog"); loadCatalog(); },
+    });
   }
 
   async function handleDelete(buildKey: string) {
@@ -304,7 +328,7 @@ export default function Library() {
     } catch { /* ignore */ }
   }
 
-  const dlPct = activeBuild ? downloading[activeBuild._build_key] : undefined;
+  const dlPct = activeDlPct;
   const isDl  = dlPct !== undefined;
   const isDel = activeBuild ? !!deleting[activeBuild._build_key] : false;
 
@@ -402,28 +426,16 @@ export default function Library() {
           {!loading && builds.length === 0 && (
             <div className={styles.empty}>Список пуст.</div>
           )}
-          {builds.map(build => {
-            const key = build._build_key;
-            const isActive = activeBuild?._build_key === key;
-            const isSelected = selectedKey === key;
-            const dlPctItem = downloading[key];
-            return (
-              <button
-                key={key}
-                className={`${styles.buildItem} ${isActive ? styles.buildItemActive : ""} ${isSelected ? styles.buildItemSelected : ""}`}
-                onClick={() => handleSelect(build)}
-              >
-                <div className={styles.buildItemName}>{build.name || `Сборка #${build.id}`}</div>
-                {build.version && <div className={styles.buildItemMeta}>{build.version}</div>}
-                {dlPctItem !== undefined && (
-                  <div className={styles.buildItemBar}>
-                    <div className={styles.buildItemFill} style={{ width: `${dlPctItem}%` }} />
-                  </div>
-                )}
-                {deleting[key] && <div className={styles.buildItemMeta}>Удаление...</div>}
-              </button>
-            );
-          })}
+          {builds.map(build => (
+            <BuildListItem
+              key={build._build_key}
+              build={build}
+              isActive={activeBuild?._build_key === build._build_key}
+              isSelected={selectedKey === build._build_key}
+              isDeleting={!!deleting[build._build_key]}
+              onClick={() => handleSelect(build)}
+            />
+          ))}
         </div>
 
         <button

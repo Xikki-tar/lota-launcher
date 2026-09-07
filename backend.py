@@ -607,10 +607,19 @@ def library_select():
     return jsonify({"ok": True})
 
 
+_active_downloads: dict[str, str] = {}
+
+
 @app.post("/library/download")
 def library_download():
     body = request.json or {}
     build_key = str(body.get("build_key") or "")
+
+    with _tasks_lock:
+        existing_task_id = _active_downloads.get(build_key)
+        if existing_task_id and _tasks.get(existing_task_id, {}).get("state") == "running":
+            return jsonify({"ok": True, "task_id": existing_task_id})
+
     auth = load_auth_data() or {}
     token = str(auth.get("token") or "")
 
@@ -626,6 +635,8 @@ def library_download():
         source_item = next((b for b in catalog.builds if not b.get("is_instance") and b.get("id") == source_id), None)
 
     task_id = _new_task(kind="download")
+    with _tasks_lock:
+        _active_downloads[build_key] = task_id
     print(f"[library] download start: build_key={build_key}", flush=True)
 
     def run():
@@ -661,6 +672,10 @@ def library_download():
         except Exception as exc:
             print(f"[library] download failed: build_key={build_key}: {exc}", flush=True)
             _task_done(task_id, str(exc))
+        finally:
+            with _tasks_lock:
+                if _active_downloads.get(build_key) == task_id:
+                    del _active_downloads[build_key]
 
     threading.Thread(target=run, daemon=True).start()
     return jsonify({"ok": True, "task_id": task_id})

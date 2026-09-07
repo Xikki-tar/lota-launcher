@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useBackend, apiGet } from "../lib/BackendContext";
 import { useI18n } from "../lib/I18nContext";
+import { type Localized, langCode, loc } from "../lib/localized";
 import LoadingDots from "../components/LoadingDots";
 import styles from "./Home.module.css";
 
@@ -8,8 +9,6 @@ function newsImageUrl(port: number | null, path: string | undefined): string | n
   if (!path || !port) return null;
   return `http://127.0.0.1:${port}/news/image?path=${encodeURIComponent(path)}`;
 }
-
-type Localized = { en?: string; ru?: string; uk?: string; [k: string]: string | undefined };
 
 interface NewsItem {
   id?: string;
@@ -20,20 +19,6 @@ interface NewsItem {
   details?: string | Localized;
   changes?: (string | Localized)[];
   image?: string;
-}
-
-type LangCode = "ru" | "uk" | "en";
-
-function langCode(language: string): LangCode {
-  if (language === "Українська") return "uk";
-  if (language === "English") return "en";
-  return "ru";
-}
-
-function loc(v: string | Localized | undefined, lang: LangCode = "ru"): string {
-  if (!v) return "";
-  if (typeof v === "string") return v;
-  return v[lang] ?? v.ru ?? v.en ?? v.uk ?? Object.values(v).find(Boolean) ?? "";
 }
 
 function typeKey(type?: string | Localized): string {

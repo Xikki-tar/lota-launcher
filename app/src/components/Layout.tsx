@@ -3,7 +3,10 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useBackend, apiGet, apiPost, invalidateCache } from "../lib/BackendContext";
 import { useI18n } from "../lib/I18nContext";
 import { win } from "../lib/tauri";
+import { startFakeProgress, applyRealProgress, stopTracking, useProgress } from "../lib/progressStore";
 import styles from "./Layout.module.css";
+
+const PLAY_PROGRESS_ID = "play-start";
 
 const PAGE_EXIT_MS  = 150;
 const PAGE_ENTER_MS = 220;
@@ -163,6 +166,12 @@ export default function Layout({ onLogout }: LayoutProps) {
       if (!data || typeof data !== "object") return;
 
       const newState = data.state ?? "idle";
+      if (newState === "running") {
+        applyRealProgress(PLAY_PROGRESS_ID, data.progress ?? 0);
+      } else {
+        stopTracking(PLAY_PROGRESS_ID);
+      }
+
       const prevState = prevPlayStateRef.current;
       if (newState === "launched" && prevState !== "launched") {
         win.hide().catch(() => {});
@@ -185,6 +194,7 @@ export default function Layout({ onLogout }: LayoutProps) {
       if (ps === "launched") {
         await apiPost(port, "/play/stop");
       } else {
+        startFakeProgress(PLAY_PROGRESS_ID);
         await apiPost(port, "/play/start");
       }
       await pollPlayState();
@@ -211,7 +221,7 @@ export default function Layout({ onLogout }: LayoutProps) {
   const isLaunched  = ps === "launched";
   const isPreparing = ps === "running";
   const isError     = ps === "error";
-  const progress    = playState.progress ?? 0;
+  const progress    = useProgress(PLAY_PROGRESS_ID) ?? 0;
   const statusText  = isError
     ? (playState.error ?? "Ошибка")
     : (playState.status ?? "");
