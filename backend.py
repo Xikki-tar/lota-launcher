@@ -570,10 +570,11 @@ def register_link_clear():
 
 @app.get("/library/catalog")
 def library_catalog():
+    fresh = request.args.get("fresh") == "1"
     auth = load_auth_data() or {}
     token = str(auth.get("token") or "")
     lib = _lib()
-    catalog = lib.load_catalog(token)
+    catalog = lib.load_catalog(token, prefer_remote=fresh)
     # инстансы первыми потом сборки по id (новые выше)
     def _sort_key(item):
         is_inst = bool(item.get("is_instance"))
@@ -982,8 +983,33 @@ def _parse_news_date(value) -> datetime:
         return datetime.min
 
 
+def _news_cache_path() -> Path:
+    return get_data_dir() / "news_cache" / "news.json"
+
+
+def _load_cached_news() -> list:
+    path = _news_cache_path()
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    items = data.get("items") if isinstance(data, dict) else None
+    return items if isinstance(items, list) else []
+
+
+def _save_cached_news(items: list) -> None:
+    path = _news_cache_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"items": items}, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 @app.get("/news")
 def news():
+    if request.args.get("fresh") != "1":
+        return jsonify({"ok": True, "items": _load_cached_news()})
+
     auth = load_auth_data() or {}
     token = str(auth.get("token") or "")
     try:
@@ -994,6 +1020,7 @@ def news():
             manifest = data.get("manifest") if isinstance(data.get("manifest"), dict) else {}
             items = list(manifest.get("items") or []) if isinstance(manifest, dict) else []
             items.sort(key=lambda x: _parse_news_date(x.get("date")), reverse=True)
+            _save_cached_news(items)
             return jsonify({"ok": True, "items": items})
         return jsonify({"ok": False, "items": [], "status": r.status_code})
     except Exception:

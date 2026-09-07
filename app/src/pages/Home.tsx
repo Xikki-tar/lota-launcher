@@ -138,13 +138,21 @@ export default function Home() {
   async function loadNews() {
     setLoading(true);
     try {
-      const data = await apiGet<{ items?: NewsItem[] }>(port, "/news", 5 * 60_000);
+      const data = await apiGet<{ items?: NewsItem[] }>(port, "/news", 0);
       setNews(data?.items ?? []);
     } catch {
       setNews([]);
     } finally {
       setLoading(false);
     }
+    refreshNewsFreshness();
+  }
+
+  async function refreshNewsFreshness() {
+    try {
+      const data = await apiGet<{ items?: NewsItem[] }>(port, "/news?fresh=1", 0);
+      if (data?.items) setNews(data.items);
+    } catch { /* ignore */ }
   }
 
   return (

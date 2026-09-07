@@ -167,7 +167,9 @@ export default function Layout({ onLogout }: LayoutProps) {
 
       const newState = data.state ?? "idle";
       if (newState === "running") {
-        applyRealProgress(PLAY_PROGRESS_ID, data.progress ?? 0);
+        if (typeof data.progress === "number" && data.progress > 0) {
+          applyRealProgress(PLAY_PROGRESS_ID, data.progress);
+        }
       } else {
         stopTracking(PLAY_PROGRESS_ID);
       }

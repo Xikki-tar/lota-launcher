@@ -262,20 +262,32 @@ export default function Library() {
     loadCatalog();
   }, [port]);
 
-  async function loadCatalog() {
-    setLoading(true);
+  function applyCatalog(data: { builds?: Build[]; selected_build?: string }) {
+    const list = data.builds ?? [];
+    setBuilds(list);
+    setSelectedKey(data.selected_build ?? "");
+    setActiveBuild(prev => {
+      if (!prev) return null;
+      return list.find(b => b._build_key === prev._build_key) ?? null;
+    });
+  }
+
+  async function loadCatalog(opts: { background?: boolean } = {}) {
+    if (!opts.background) setLoading(true);
     try {
       const data = await apiGet<{ builds: Build[]; selected_build: string }>(port, "/library/catalog", 0);
-      const list = data.builds ?? [];
-      setBuilds(list);
-      setSelectedKey(data.selected_build ?? "");
-      // обновляем activeBuild чтоб не потерять выбор после рефреша
-      setActiveBuild(prev => {
-        if (!prev) return null;
-        return list.find(b => b._build_key === prev._build_key) ?? null;
-      });
+      applyCatalog(data);
     } catch { /* ignore */ }
-    finally { setLoading(false); }
+    finally { if (!opts.background) setLoading(false); }
+
+    if (!opts.background) refreshCatalogFreshness();
+  }
+
+  async function refreshCatalogFreshness() {
+    try {
+      const data = await apiGet<{ builds: Build[]; selected_build: string }>(port, "/library/catalog?fresh=1", 0);
+      applyCatalog(data);
+    } catch { /* ignore */ }
   }
 
   async function handleSelect(build: Build) {
