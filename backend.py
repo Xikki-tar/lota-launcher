@@ -5,6 +5,7 @@ import hashlib
 import os
 import platform
 import socket
+import ssl
 import tempfile
 import threading
 from datetime import datetime
@@ -778,6 +779,22 @@ _MOD_FAILURE_MARKERS = (
     "DuplicateModsFoundException",
 )
 
+_NETWORK_ERROR_TYPES = (
+    http.exceptions.ConnectionError,
+    http.exceptions.SSLError,
+    http.exceptions.Timeout,
+    ssl.SSLError,
+    socket.timeout,
+    ConnectionError,
+)
+
+
+def _friendly_play_error(exc: Exception) -> str:
+    if isinstance(exc, _NETWORK_ERROR_TYPES):
+        from window.i18n import t
+        return t("play_error_network")
+    return str(exc)
+
 
 @app.get("/play/state")
 def play_state():
@@ -913,9 +930,9 @@ def play_start():
                     _play_state.update({"state": "idle", "status": "", "pid": None, "_proc": None, "log_path": str(log_path)})
 
         except Exception as exc:
-            print(f"[play] launch failed: {exc}", flush=True)
+            print(f"[play] launch failed: {type(exc).__name__}: {exc}", flush=True)
             with _play_lock:
-                _play_state.update({"state": "error", "error": str(exc)})
+                _play_state.update({"state": "error", "error": _friendly_play_error(exc)})
 
     threading.Thread(target=run, daemon=True).start()
     return jsonify({"ok": True})

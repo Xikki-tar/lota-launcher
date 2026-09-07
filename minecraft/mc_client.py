@@ -38,7 +38,7 @@ FORGE_MAVEN_BASE = (
 )
 DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 REQUEST_TIMEOUT = (10, 60)
-DOWNLOAD_RETRIES = 5
+DOWNLOAD_RETRIES = 8
 DOWNLOAD_BACKOFF_SECONDS = 0.7
 
 ProgressCallback = Callable[[int, int], None] | None
@@ -165,6 +165,7 @@ def _download_json(url: str, dest: Path | None = None) -> dict:
             if attempt < DOWNLOAD_RETRIES - 1:
                 time.sleep(DOWNLOAD_BACKOFF_SECONDS * (attempt + 1))
     else:
+        print(f"[download] gave up on {url} after {DOWNLOAD_RETRIES} attempts: {type(last_error).__name__}: {last_error}", flush=True)
         raise last_error or RuntimeError(f"Download failed: {url}")
     if dest:
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -211,6 +212,7 @@ def _download_file(url: str, dest: Path, size: int | None = None, sha1: str | No
                 _reset_session()
         if attempt < DOWNLOAD_RETRIES - 1:
             time.sleep(DOWNLOAD_BACKOFF_SECONDS * (attempt + 1))
+    print(f"[download] gave up on {urls[0]} after {DOWNLOAD_RETRIES} attempts: {type(last_error).__name__}: {last_error}", flush=True)
     raise last_error or RuntimeError(f"Download failed: {urls[0]}")
 
 

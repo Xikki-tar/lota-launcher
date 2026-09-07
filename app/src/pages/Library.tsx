@@ -299,7 +299,7 @@ export default function Library() {
         port, `/library/build/folder?build_key=${encodeURIComponent(build._build_key)}`, 0
       );
       if (res.ok && res.path) {
-        await invoke("plugin:opener|open_path", { path: res.path }).catch(() => {});
+        await invoke("plugin:opener|reveal_item_in_dir", { paths: [res.path] }).catch(() => {});
       }
     } catch { /* ignore */ }
   }
