@@ -130,7 +130,7 @@ class LibraryService:
     def create_instance(self, payload: dict) -> dict:
         source_build = payload.get("build") or {}
         timestamp = int(time.time())
-        return {
+        instance = {
             "id": f"instance-{timestamp}-{int(time.time_ns() % 1_000_000)}",
             "created_at": timestamp,
             "name": str(payload.get("name") or "").strip(),
@@ -140,6 +140,10 @@ class LibraryService:
             "_source_build_id": source_build.get("id"),
             "is_instance": True,
         }
+        items = self.load_instances()
+        items.append(instance)
+        self.save_instances(items)
+        return instance
 
     def update_instance(self, target_id, payload: dict) -> list[dict]:
         items = self.load_instances()

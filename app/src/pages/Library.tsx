@@ -343,6 +343,8 @@ export default function Library() {
   const dlPct = activeDlPct;
   const isDl  = dlPct !== undefined;
   const isDel = activeBuild ? !!deleting[activeBuild._build_key] : false;
+  const userInstances = builds.filter(b => b.is_instance);
+  const catalogBuilds = builds.filter(b => !b.is_instance);
 
   return (
     <div className="innerLayout">
@@ -432,13 +434,12 @@ export default function Library() {
 
       {/* ── Right sidebar — builds list ── */}
       <div className="innerSidebar">
-        <div className={styles.sidebarSection}>{t("library_tab_builds", "Сборки")}</div>
-
+        <div className={styles.sidebarSection}>{t("library_tab_builds", "Доступные сборки")}</div>
         <div className={styles.buildList}>
-          {!loading && builds.length === 0 && (
+          {!loading && catalogBuilds.length === 0 && (
             <div className={styles.empty}>Список пуст.</div>
           )}
-          {builds.map(build => (
+          {catalogBuilds.map(build => (
             <BuildListItem
               key={build._build_key}
               build={build}
@@ -449,6 +450,25 @@ export default function Library() {
             />
           ))}
         </div>
+
+        <div className={styles.sidebarSection}>{t("library_tab_instances", "Мои экземпляры")}</div>
+        <div className={`${styles.buildList} ${styles.buildListCompact}`}>
+          {!loading && userInstances.length === 0 && (
+            <div className={styles.empty}>{t("library_instances_empty", "Экземпляров пока нет.")}</div>
+          )}
+          {userInstances.map(build => (
+            <BuildListItem
+              key={build._build_key}
+              build={build}
+              isActive={activeBuild?._build_key === build._build_key}
+              isSelected={selectedKey === build._build_key}
+              isDeleting={!!deleting[build._build_key]}
+              onClick={() => handleSelect(build)}
+            />
+          ))}
+        </div>
+
+        <div className={styles.sidebarSpacer} />
 
         <button
           className={styles.btnAddInstance}

@@ -211,12 +211,22 @@
 }
 
 .buildList {
-  flex: 1;
+  flex: 0 1 auto;
   min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.sidebarSpacer {
+  flex: 1;
+  min-height: 0;
+}
+
+.buildListCompact {
+  flex: 0 1 auto;
+  max-height: 160px;
 }
 
 .buildItem {

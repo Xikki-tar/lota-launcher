@@ -193,10 +193,10 @@ def get_config_dir() -> Path:
     home = Path.home()
     system = platform.system()
     app_dir = _platform_app_dir(home, system)
-    legacy_dirs = _legacy_app_candidates(home, system)
-    for legacy_dir in legacy_dirs:
-        if legacy_dir.resolve() != app_dir.resolve():
-            _migrate_dir(legacy_dir, app_dir)
+    if not os.getenv("LOTA_LAUNCHER_HOME", "").strip():
+        for legacy_dir in _legacy_app_candidates(home, system):
+            if legacy_dir.resolve() != app_dir.resolve():
+                _migrate_dir(legacy_dir, app_dir)
     return _ensure_dir(app_dir, [])
 
 
