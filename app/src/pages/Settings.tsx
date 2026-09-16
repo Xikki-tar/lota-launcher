@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useBackend, apiGet, apiPost, invalidateCache } from "../lib/BackendContext";
 import { useI18n } from "../lib/I18nContext";
 import type { PageContext } from "../components/Layout";
@@ -39,7 +40,6 @@ export default function Settings() {
   const [javaList, setJavaList] = useState<JavaCandidate[]>([]);
   const [scanning, setScanning] = useState(false);
   const [themesNote, setThemesNote] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [appVersion, setAppVersion] = useState("");
   const [displayVersion, setDisplayVersion] = useState("");
@@ -134,12 +134,9 @@ export default function Settings() {
     finally { setScanning(false); }
   }
 
-  function handleBrowse(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const path = (file as any).path ?? file.name;
-    set("java_path", path);
-    e.target.value = "";
+  async function handleBrowse() {
+    const path = await open({ multiple: false, directory: false });
+    if (typeof path === "string") set("java_path", path);
   }
 
   function set<K extends keyof SettingsData>(key: K, value: SettingsData[K]) {
@@ -154,13 +151,6 @@ export default function Settings() {
 
   return (
     <div className="innerLayout">
-      <input
-        ref={fileInputRef}
-        type="file"
-        style={{ display: "none" }}
-        onChange={handleBrowse}
-      />
-
       <div className="innerPanel innerPanelScroll">
         <div className={styles.content}>
           <div className={styles.pageTitle}>{t("settings_title", "Настройки")}</div>
@@ -225,7 +215,7 @@ export default function Settings() {
                   <button
                     className={styles.btnSmall}
                     disabled={form.auto_java_version === true}
-                    onClick={() => fileInputRef.current?.click()}
+                    onClick={handleBrowse}
                   >
                     {t("btn_browse", "Обзор")}
                   </button>

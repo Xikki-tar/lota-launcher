@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useBackend, apiGet, apiPost, apiDelete, invalidateCache } from "../lib/BackendContext";
 import { useI18n } from "../lib/I18nContext";
 import { type Localized, langCode, loc } from "../lib/localized";
@@ -52,7 +53,6 @@ function InstanceOverlay({ mode, instance, builds, port, onClose, onSaved }: Ove
   const [buildIdx, setBuildIdx] = useState(0);
   const [busy, setBusy]   = useState(false);
   const [err, setErr]     = useState("");
-  const fileRef = useRef<HTMLInputElement>(null);
 
   const nameDirty  = useRef(!!instance);
   const descDirty  = useRef(!!instance);
@@ -121,10 +121,13 @@ function InstanceOverlay({ mode, instance, builds, port, onClose, onSaved }: Ove
     finally { setBusy(false); }
   }
 
-  function onImageFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (file) { setImage((file as any).path ?? file.name); imageDirty.current = true; }
-    e.target.value = "";
+  async function onImageFile() {
+    const path = await open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] }],
+    });
+    if (typeof path === "string") { setImage(path); imageDirty.current = true; }
   }
 
   const overlayClass = `${styles.instanceOverlay} ${visible ? styles.instanceOverlayVisible : ""}`;
@@ -161,8 +164,7 @@ function InstanceOverlay({ mode, instance, builds, port, onClose, onSaved }: Ove
             onChange={e => { setImage(e.target.value); imageDirty.current = true; }}
             placeholder={t("library_instance_image", "Путь к изображению")}
           />
-          <button className={styles.ghostBtn} onClick={() => fileRef.current?.click()}>{t("library_instance_browse", "Обзор")}</button>
-          <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={onImageFile} />
+          <button className={styles.ghostBtn} onClick={onImageFile}>{t("library_instance_browse", "Обзор")}</button>
         </div>
 
         {mode === "create" && (
