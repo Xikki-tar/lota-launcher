@@ -66,21 +66,50 @@ fn install_root_data_dir() -> Option<PathBuf> {
     if !install_root.file_name()?.to_str()?.eq_ignore_ascii_case(APP_DIR_NAME) {
         return None;
     }
-    Some(install_root.join("data"))
+    Some(install_root.to_path_buf())
 }
 
-fn copy_dir_merge(src: &Path, dst: &Path) {
+const MIGRATION_MARKER: &str = ".migrated";
+const MIGRATION_SKIP: [&str; 2] = ["runtime", "data"];
+
+fn normalized(p: &Path) -> String {
+    p.to_string_lossy().replace('/', "\\").trim_end_matches('\\').to_lowercase()
+}
+
+fn is_same_or_nested(a: &Path, b: &Path) -> bool {
+    let (a, b) = (normalized(a), normalized(b));
+    a == b || a.starts_with(&format!("{b}\\")) || b.starts_with(&format!("{a}\\"))
+}
+
+fn copy_dir_merge(src: &Path, dst: &Path, skip_top_level: &[&str]) {
     let Ok(entries) = fs::read_dir(src) else { return };
     for entry in entries.flatten() {
+        let name = entry.file_name();
+        if skip_top_level.iter().any(|s| name.to_string_lossy().eq_ignore_ascii_case(s)) {
+            continue;
+        }
         let path = entry.path();
-        let target = dst.join(entry.file_name());
+        let target = dst.join(&name);
         if path.is_dir() {
             let _ = fs::create_dir_all(&target);
-            copy_dir_merge(&path, &target);
+            copy_dir_merge(&path, &target, &[]);
         } else if !target.exists() {
             let _ = fs::copy(&path, &target);
         }
     }
+}
+
+fn migrate_legacy_data(legacy_dir: &Path, new_dir: &Path) {
+    if !legacy_dir.is_dir() || is_same_or_nested(legacy_dir, new_dir) {
+        return;
+    }
+    let marker = new_dir.join(MIGRATION_MARKER);
+    if marker.exists() {
+        return;
+    }
+    let _ = fs::create_dir_all(new_dir);
+    copy_dir_merge(legacy_dir, new_dir, &MIGRATION_SKIP);
+    let _ = fs::write(marker, "");
 }
 
 pub fn init_data_dir() {
@@ -93,13 +122,57 @@ pub fn init_data_dir() {
     #[cfg(target_os = "windows")]
     {
         let Some(new_dir) = install_root_data_dir() else { return };
-        let legacy_dir = default_config_dir();
         let _ = fs::create_dir_all(&new_dir);
-        if legacy_dir != new_dir && legacy_dir.is_dir() {
-            copy_dir_merge(&legacy_dir, &new_dir);
-            let _ = fs::remove_dir_all(&legacy_dir);
-        }
+        migrate_legacy_data(&default_config_dir(), &new_dir);
         std::env::set_var("LOTA_LAUNCHER_HOME", &new_dir);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("lota-store-test-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn nested_dirs_are_never_migrated() {
+        let legacy = scratch("nested").join("lota-launcher");
+        fs::create_dir_all(legacy.join("runtime")).unwrap();
+        fs::write(legacy.join("config.cfg"), "x").unwrap();
+        let new_dir = legacy.join("data");
+
+        migrate_legacy_data(&legacy, &new_dir);
+
+        assert!(!new_dir.exists());
+        assert!(legacy.join("config.cfg").exists());
+    }
+
+    #[test]
+    fn disjoint_dirs_are_copied_without_deleting_or_cloning_runtime() {
+        let base = scratch("disjoint");
+        let legacy = base.join("old");
+        let new_dir = base.join("new");
+        fs::create_dir_all(legacy.join("runtime")).unwrap();
+        fs::create_dir_all(legacy.join("library")).unwrap();
+        fs::write(legacy.join("runtime").join("app.exe"), "x").unwrap();
+        fs::write(legacy.join("library").join("a.txt"), "x").unwrap();
+        fs::write(legacy.join("config.cfg"), "x").unwrap();
+
+        migrate_legacy_data(&legacy, &new_dir);
+
+        assert!(new_dir.join("config.cfg").exists());
+        assert!(new_dir.join("library").join("a.txt").exists());
+        assert!(!new_dir.join("runtime").exists());
+        assert!(legacy.join("config.cfg").exists());
+
+        fs::remove_file(new_dir.join("config.cfg")).unwrap();
+        migrate_legacy_data(&legacy, &new_dir);
+        assert!(!new_dir.join("config.cfg").exists());
     }
 }
 
