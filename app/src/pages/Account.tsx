@@ -162,7 +162,7 @@ export default function Account() {
       } else if (res?.data?.error === "already_linked") {
         setMessage({ text: t("account_discord_already_linked", "Discord уже привязан к этому аккаунту."), ok: true });
       } else {
-        setMessage({ text: t("account_skin_upload_failed", "Не удалось получить ссылку."), ok: false });
+        setMessage({ text: t("account_discord_link_failed", "Не удалось получить ссылку для привязки Discord."), ok: false });
       }
     } catch {
       setMessage({ text: t("error_conn_refused", "Ошибка соединения."), ok: false });

@@ -55,60 +55,59 @@ pub fn get_config_dir() -> PathBuf {
     dir
 }
 
-#[cfg(target_os = "windows")]
-fn install_root_data_dir() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let runtime_dir = exe.parent()?;
-    if !runtime_dir.file_name()?.to_str()?.eq_ignore_ascii_case("runtime") {
-        return None;
-    }
-    let install_root = runtime_dir.parent()?;
-    if !install_root.file_name()?.to_str()?.eq_ignore_ascii_case(APP_DIR_NAME) {
-        return None;
-    }
-    Some(install_root.to_path_buf())
+#[cfg(all(target_os = "windows", not(debug_assertions)))]
+fn exe_root_dir() -> Option<PathBuf> {
+    let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let probe = dir.join(".write_probe");
+    fs::write(&probe, b"").ok()?;
+    let _ = fs::remove_file(&probe);
+    Some(dir)
 }
 
+#[cfg(any(all(target_os = "windows", not(debug_assertions)), test))]
 const MIGRATION_MARKER: &str = ".migrated";
-const MIGRATION_SKIP: [&str; 2] = ["runtime", "data"];
+#[cfg(any(all(target_os = "windows", not(debug_assertions)), test))]
+const MIGRATION_SKIP: [&str; 4] = ["runtime", "data", "lota-launcher", MIGRATION_MARKER];
 
+#[cfg(any(all(target_os = "windows", not(debug_assertions)), test))]
 fn normalized(p: &Path) -> String {
     p.to_string_lossy().replace('/', "\\").trim_end_matches('\\').to_lowercase()
 }
 
-fn is_same_or_nested(a: &Path, b: &Path) -> bool {
-    let (a, b) = (normalized(a), normalized(b));
-    a == b || a.starts_with(&format!("{b}\\")) || b.starts_with(&format!("{a}\\"))
+#[cfg(any(all(target_os = "windows", not(debug_assertions)), test))]
+fn is_same_or_inside(inner: &Path, outer: &Path) -> bool {
+    let (inner, outer) = (normalized(inner), normalized(outer));
+    inner == outer || inner.starts_with(&format!("{outer}\\"))
 }
 
-fn copy_dir_merge(src: &Path, dst: &Path, skip_top_level: &[&str]) {
-    let Ok(entries) = fs::read_dir(src) else { return };
+#[cfg(any(all(target_os = "windows", not(debug_assertions)), test))]
+fn move_legacy_entries(legacy: &Path, root: &Path) {
+    if !legacy.is_dir() || is_same_or_inside(legacy, root) {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(legacy) else { return };
     for entry in entries.flatten() {
         let name = entry.file_name();
-        if skip_top_level.iter().any(|s| name.to_string_lossy().eq_ignore_ascii_case(s)) {
+        if MIGRATION_SKIP.iter().any(|s| name.to_string_lossy().eq_ignore_ascii_case(s)) {
             continue;
         }
         let path = entry.path();
-        let target = dst.join(&name);
-        if path.is_dir() {
-            let _ = fs::create_dir_all(&target);
-            copy_dir_merge(&path, &target, &[]);
-        } else if !target.exists() {
-            let _ = fs::copy(&path, &target);
+        let target = root.join(&name);
+        if target.exists() || is_same_or_inside(root, &path) {
+            continue;
         }
+        let _ = fs::rename(&path, &target);
     }
 }
 
-fn migrate_legacy_data(legacy_dir: &Path, new_dir: &Path) {
-    if !legacy_dir.is_dir() || is_same_or_nested(legacy_dir, new_dir) {
-        return;
-    }
-    let marker = new_dir.join(MIGRATION_MARKER);
+#[cfg(any(all(target_os = "windows", not(debug_assertions)), test))]
+fn migrate_legacy_data(legacy: &Path, root: &Path) {
+    let marker = root.join(MIGRATION_MARKER);
     if marker.exists() {
         return;
     }
-    let _ = fs::create_dir_all(new_dir);
-    copy_dir_merge(legacy_dir, new_dir, &MIGRATION_SKIP);
+    move_legacy_entries(&legacy.join("data"), root);
+    move_legacy_entries(legacy, root);
     let _ = fs::write(marker, "");
 }
 
@@ -119,12 +118,11 @@ pub fn init_data_dir() {
         }
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", not(debug_assertions)))]
     {
-        let Some(new_dir) = install_root_data_dir() else { return };
-        let _ = fs::create_dir_all(&new_dir);
-        migrate_legacy_data(&default_config_dir(), &new_dir);
-        std::env::set_var("LOTA_LAUNCHER_HOME", &new_dir);
+        let Some(root) = exe_root_dir() else { return };
+        migrate_legacy_data(&default_config_dir(), &root);
+        std::env::set_var("LOTA_LAUNCHER_HOME", &root);
     }
 }
 
@@ -140,39 +138,69 @@ mod tests {
     }
 
     #[test]
-    fn nested_dirs_are_never_migrated() {
-        let legacy = scratch("nested").join("lota-launcher");
+    fn moves_data_into_separate_install_dir_once() {
+        let base = scratch("separate");
+        let legacy = base.join("lota-launcher");
+        let root = base.join("Lota Launcher");
+        fs::create_dir_all(legacy.join("library")).unwrap();
         fs::create_dir_all(legacy.join("runtime")).unwrap();
+        fs::create_dir_all(&root).unwrap();
         fs::write(legacy.join("config.cfg"), "x").unwrap();
-        let new_dir = legacy.join("data");
+        fs::write(legacy.join("library").join("a.txt"), "x").unwrap();
+        fs::write(root.join("lota-launcher.exe"), "bin").unwrap();
 
-        migrate_legacy_data(&legacy, &new_dir);
+        migrate_legacy_data(&legacy, &root);
 
-        assert!(!new_dir.exists());
-        assert!(legacy.join("config.cfg").exists());
+        assert!(root.join("config.cfg").exists());
+        assert!(root.join("library").join("a.txt").exists());
+        assert!(!root.join("runtime").exists());
+        assert!(legacy.join("runtime").exists());
+        assert_eq!(fs::read_to_string(root.join("lota-launcher.exe")).unwrap(), "bin");
+
+        fs::write(legacy.join("late.cfg"), "x").unwrap();
+        migrate_legacy_data(&legacy, &root);
+        assert!(!root.join("late.cfg").exists());
     }
 
     #[test]
-    fn disjoint_dirs_are_copied_without_deleting_or_cloning_runtime() {
-        let base = scratch("disjoint");
-        let legacy = base.join("old");
-        let new_dir = base.join("new");
-        fs::create_dir_all(legacy.join("runtime")).unwrap();
-        fs::create_dir_all(legacy.join("library")).unwrap();
-        fs::write(legacy.join("runtime").join("app.exe"), "x").unwrap();
-        fs::write(legacy.join("library").join("a.txt"), "x").unwrap();
+    fn install_inside_legacy_dir_does_not_recurse() {
+        let legacy = scratch("nested").join("lota-launcher");
+        let root = legacy.join("runtime");
+        fs::create_dir_all(&root).unwrap();
         fs::write(legacy.join("config.cfg"), "x").unwrap();
 
-        migrate_legacy_data(&legacy, &new_dir);
+        migrate_legacy_data(&legacy, &root);
 
-        assert!(new_dir.join("config.cfg").exists());
-        assert!(new_dir.join("library").join("a.txt").exists());
-        assert!(!new_dir.join("runtime").exists());
+        assert!(root.join("config.cfg").exists());
+        assert!(!root.join("runtime").exists());
+        assert!(legacy.join("runtime").exists());
+    }
+
+    #[test]
+    fn prefers_data_from_old_data_subdir_and_skips_junk() {
+        let legacy = scratch("olddata").join("lota-launcher");
+        let root = legacy.join("runtime");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(legacy.join("data").join("runtime").join("lota-launcher")).unwrap();
+        fs::write(legacy.join("data").join("config.cfg"), "from-data").unwrap();
+        fs::write(legacy.join("config.cfg"), "from-root").unwrap();
+
+        migrate_legacy_data(&legacy, &root);
+
+        assert_eq!(fs::read_to_string(root.join("config.cfg")).unwrap(), "from-data");
+        assert!(!root.join("runtime").exists());
+        assert!(!root.join("lota-launcher").exists());
+    }
+
+    #[test]
+    fn same_dir_is_untouched() {
+        let legacy = scratch("same").join("lota-launcher");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("config.cfg"), "x").unwrap();
+
+        migrate_legacy_data(&legacy, &legacy);
+
         assert!(legacy.join("config.cfg").exists());
-
-        fs::remove_file(new_dir.join("config.cfg")).unwrap();
-        migrate_legacy_data(&legacy, &new_dir);
-        assert!(!new_dir.join("config.cfg").exists());
     }
 }
 

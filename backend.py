@@ -1394,9 +1394,16 @@ def account_discord_link():
         return jsonify({"ok": False, "error": "no_token"})
     try:
         base = get_api_base()
-        r = http.post(f"{base}/api/account/discord-link", json={"token": token}, timeout=5)
-        return jsonify({"ok": r.status_code == 200, "status_code": r.status_code, "data": r.json()})
-    except Exception:
+        r = http.post(f"{base}/api/account/discord-link", json={"token": token}, timeout=15)
+        try:
+            data = r.json()
+        except ValueError:
+            data = {"error": "bad_response"}
+        if r.status_code != 200:
+            print(f"[account] discord link failed: HTTP {r.status_code}: {str(data)[:300]}", flush=True)
+        return jsonify({"ok": r.status_code == 200, "status_code": r.status_code, "data": data})
+    except Exception as exc:
+        print(f"[account] discord link failed: {type(exc).__name__}: {exc}", flush=True)
         return jsonify({"ok": False, "error": "conn_refused"})
 
 
