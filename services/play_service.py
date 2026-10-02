@@ -3,6 +3,7 @@ import io
 import json
 import os
 import platform
+import secrets
 import shutil
 import subprocess
 import tarfile
@@ -300,11 +301,69 @@ class PlayWorker(QThread):
             self.failed.emit(str(exc))
 
 
+BUNDLE_DISABLED_SUFFIX = ".lota-disabled"
+
+
 @dataclass
 class BundleState:
     temp_dir: Path
     written: list[Path]
     backups: list[tuple[Path, Path]]
+    disabled: list[tuple[Path, Path]]
+    game_args: list[str]
+
+
+def _random_name() -> str:
+    return secrets.token_hex(6)
+
+
+def _session_file() -> Path:
+    return get_data_dir() / "cache" / "session.json"
+
+
+def _load_session_dirs() -> list[Path]:
+    try:
+        data = json.loads(_session_file().read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(data, list):
+        return []
+    return [Path(item) for item in data if isinstance(item, str)]
+
+
+def _save_session_dirs(dirs: list[Path]) -> None:
+    path = _session_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps([str(d) for d in dirs]), encoding="utf-8")
+
+
+def _remove_temp_dir(path: Path) -> None:
+    try:
+        if path.resolve().parent != Path(tempfile.gettempdir()).resolve():
+            return
+    except OSError:
+        return
+    shutil.rmtree(path, ignore_errors=True)
+
+
+def _remove_stale_bundle_dirs() -> None:
+    for path in _load_session_dirs():
+        _remove_temp_dir(path)
+    _save_session_dirs([])
+
+
+def _restore_disabled_mods(mods_dir: Path) -> None:
+    if not mods_dir.is_dir():
+        return
+    for path in mods_dir.glob(f"*{BUNDLE_DISABLED_SUFFIX}"):
+        original = path.with_name(path.name[: -len(BUNDLE_DISABLED_SUFFIX)])
+        if not original.exists():
+            try:
+                path.replace(original)
+            except OSError:
+                pass
+
+
 
 
 class PlayService:
@@ -618,6 +677,10 @@ class PlayService:
         return aes.decrypt(iv, ciphertext, b"PACK" + b"\x01")
 
     def prepare_bundle_files(self, game_dir: Path) -> BundleState | None:
+        mods_dir = game_dir / "mods"
+        _remove_stale_bundle_dirs()
+        _restore_disabled_mods(mods_dir)
+
         manifest_path = self.bundle_manifest_path(game_dir)
         if not manifest_path.exists():
             return None
@@ -645,25 +708,53 @@ class PlayService:
             raise RuntimeError(t("play_bundle_key_error"))
 
         plain_zip = self.decrypt_archive(encrypted_path.read_bytes(), key32)
-        temp_dir = Path(tempfile.mkdtemp(prefix="bundle_"))
-        with zipfile.ZipFile(io.BytesIO(plain_zip), "r") as archive:
-            archive.extractall(temp_dir)
+        state = BundleState(
+            temp_dir=Path(tempfile.mkdtemp(prefix="")),
+            written=[],
+            backups=[],
+            disabled=[],
+            game_args=[],
+        )
+        _save_session_dirs([state.temp_dir])
+        payload_dir = state.temp_dir / _random_name()
+        maven_dir = state.temp_dir / _random_name()
+        group = _random_name()
+        coords: list[str] = []
+        try:
+            with zipfile.ZipFile(io.BytesIO(plain_zip), "r") as archive:
+                archive.extractall(payload_dir)
 
-        written: list[Path] = []
-        backups: list[tuple[Path, Path]] = []
-        for root, _, files in os.walk(temp_dir):
-            for filename in files:
-                src = Path(root) / filename
-                rel = src.relative_to(temp_dir)
+            for src in sorted(p for p in payload_dir.rglob("*") if p.is_file()):
+                rel = src.relative_to(payload_dir)
+                if len(rel.parts) == 2 and rel.parts[0].lower() == "mods" and src.suffix.lower() == ".jar":
+                    artifact = _random_name()
+                    dst = maven_dir / group / artifact / "1" / f"{artifact}-1.jar"
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    src.replace(dst)
+                    coords.append(f"{group}:{artifact}:1")
+                    duplicate = mods_dir / src.name
+                    if duplicate.is_file():
+                        disabled = duplicate.with_name(duplicate.name + BUNDLE_DISABLED_SUFFIX)
+                        duplicate.replace(disabled)
+                        state.disabled.append((disabled, duplicate))
+                    continue
+
                 dst = game_dir / rel
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 if dst.exists():
                     backup = dst.with_suffix(dst.suffix + ".bak")
                     dst.replace(backup)
-                    backups.append((backup, dst))
+                    state.backups.append((backup, dst))
                 shutil.copy2(src, dst)
-                written.append(dst)
-        return BundleState(temp_dir=temp_dir, written=written, backups=backups)
+                state.written.append(dst)
+        except Exception:
+            self.cleanup_bundle_files(state)
+            raise
+
+        shutil.rmtree(payload_dir, ignore_errors=True)
+        if coords:
+            state.game_args = ["--fml.mavenRoots", str(maven_dir), "--fml.mods", ",".join(coords)]
+        return state
 
     def cleanup_bundle_files(self, bundle_state: BundleState | None) -> None:
         if not bundle_state:
@@ -682,8 +773,15 @@ class PlayService:
                     backup.replace(dst)
             except Exception:
                 pass
+        for disabled, original in bundle_state.disabled:
+            try:
+                if disabled.exists() and not original.exists():
+                    disabled.replace(original)
+            except Exception:
+                pass
+        _remove_temp_dir(bundle_state.temp_dir)
         try:
-            shutil.rmtree(bundle_state.temp_dir, ignore_errors=True)
+            _save_session_dirs([d for d in _load_session_dirs() if d != bundle_state.temp_dir])
         except Exception:
             pass
 

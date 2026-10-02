@@ -159,7 +159,7 @@ export default function Account() {
       );
       if (res?.ok && res.data?.command) {
         setDiscordState({ command: res.data.command, url: res.data.url ?? "" });
-      } else if (res?.data?.error === "already_linked") {
+      } else if (res?.data?.error === "already_linked" || res?.data?.error === "discord_already_linked") {
         setMessage({ text: t("account_discord_already_linked", "Discord уже привязан к этому аккаунту."), ok: true });
       } else {
         setMessage({ text: t("account_discord_link_failed", "Не удалось получить ссылку для привязки Discord."), ok: false });

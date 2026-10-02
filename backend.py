@@ -955,9 +955,11 @@ def play_start():
                     game_dir_override=game_dir,
                 )
 
+                argv = spec.argv + (bundle_state.game_args if bundle_state else [])
+
                 import subprocess
                 proc = subprocess.Popen(
-                    spec.argv, cwd=spec.cwd,
+                    argv, cwd=spec.cwd,
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, encoding="utf-8", errors="replace",
                 )
@@ -1463,7 +1465,7 @@ def account_discord_link():
             data = r.json()
         except ValueError:
             data = {"error": "bad_response"}
-        if r.status_code != 200:
+        if r.status_code not in (200, 409):
             print(f"[account] discord link failed: HTTP {r.status_code}: {str(data)[:300]}", flush=True)
         return jsonify({"ok": r.status_code == 200, "status_code": r.status_code, "data": data})
     except Exception as exc:
