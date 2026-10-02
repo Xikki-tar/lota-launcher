@@ -2,7 +2,8 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "../lib/I18nContext";
 import { pollUpdateTask, startUpdateInstall, type UpdateCheckResult } from "../lib/update";
-import { trackTask, useProgress } from "../lib/progressStore";
+import { trackTask } from "../lib/progressStore";
+import DownloadProgress from "./DownloadProgress";
 import styles from "./UpdateDialog.module.css";
 
 interface UpdateDialogProps {
@@ -19,7 +20,6 @@ export default function UpdateDialog({ port, info, onClose }: UpdateDialogProps)
   const { t } = useI18n();
   const [phase, setPhase] = useState<Phase>("confirm");
   const [error, setError] = useState("");
-  const progress = useProgress(UPDATE_TASK_ID) ?? 0;
 
   function handleInstall() {
     const url = info.url;
@@ -86,12 +86,7 @@ export default function UpdateDialog({ port, info, onClose }: UpdateDialogProps)
         {phase === "installing" && (
           <>
             <div className={styles.dialogText}>{t("update_installing", "Скачиваю и устанавливаю обновление...")}</div>
-            <div className={styles.dlProgress}>
-              <div className={styles.dlBar}>
-                <div className={styles.dlFill} style={{ width: `${progress}%` }} />
-              </div>
-              <span className={styles.dlText}>{progress}%</span>
-            </div>
+            <DownloadProgress id={UPDATE_TASK_ID} />
           </>
         )}
 

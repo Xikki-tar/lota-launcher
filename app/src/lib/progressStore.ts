@@ -5,9 +5,11 @@ const TRANSITION_MS = 1000;
 
 type Phase = "fake" | "transition" | "real";
 
-interface ProgressEntry {
+export interface ProgressEntry {
   percent: number;
   phase: Phase;
+  file?: string | null;
+  speed?: number;
 }
 
 interface PollResult {
@@ -16,6 +18,8 @@ interface PollResult {
   error?: string | null;
   result?: unknown;
   started?: boolean;
+  file?: string | null;
+  speed?: number;
 }
 
 const entries = new Map<string, ProgressEntry>();
@@ -29,7 +33,18 @@ function emit(id: string) {
 }
 
 function setEntry(id: string, entry: ProgressEntry) {
-  entries.set(id, entry);
+  const prev = entries.get(id);
+  entries.set(id, { file: prev?.file, speed: prev?.speed, ...entry });
+  emit(id);
+}
+
+export function setProgressMeta(id: string, meta: { file?: string | null; speed?: number }) {
+  const entry = entries.get(id);
+  if (!entry) return;
+  const file = meta.file === undefined ? entry.file : meta.file;
+  const speed = meta.speed === undefined ? entry.speed : meta.speed;
+  if (file === entry.file && speed === entry.speed) return;
+  entries.set(id, { ...entry, file, speed });
   emit(id);
 }
 
@@ -148,6 +163,7 @@ export function trackTask(
     }
     inFlight = false;
     if (stopped) return;
+    setProgressMeta(id, { file: res.file, speed: res.speed });
 
     if (res.state === "done") {
       stopped = true;
@@ -170,6 +186,12 @@ export function trackTask(
 
   pollIntervals.set(id, setInterval(tick, intervalMs));
   tick();
+}
+
+export function useProgressInfo(id: string | null): ProgressEntry | undefined {
+  const subscribeFn = useCallback((cb: () => void) => (id ? subscribe(id, cb) : () => {}), [id]);
+  const getSnapshot = useCallback(() => (id ? entries.get(id) : undefined), [id]);
+  return useSyncExternalStore(subscribeFn, getSnapshot);
 }
 
 export function useProgress(id: string | null): number | undefined {

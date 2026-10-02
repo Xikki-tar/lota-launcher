@@ -8,6 +8,8 @@ import socket
 import ssl
 import tempfile
 import threading
+import time
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -169,10 +171,38 @@ def _task_done(task_id: str, error: str | None = None, result: dict | None = Non
             _tasks[task_id]["result"] = result
 
 
-def _task_progress(task_id: str, progress: int):
+def _task_progress(task_id: str, progress: int | None = None, file: str | None = None, speed: float | None = None):
     with _tasks_lock:
         if task_id in _tasks:
-            _tasks[task_id]["progress"] = progress
+            if progress is not None:
+                _tasks[task_id]["progress"] = progress
+            if file is not None:
+                _tasks[task_id]["file"] = file
+            if speed is not None:
+                _tasks[task_id]["speed"] = speed
+
+
+class _SpeedMeter:
+    def __init__(self, window: float = 2.0):
+        self._lock = threading.Lock()
+        self._samples: deque[tuple[float, int]] = deque()
+        self._window = window
+
+    def _trim(self, now: float) -> None:
+        while self._samples and now - self._samples[0][0] > self._window:
+            self._samples.popleft()
+
+    def add(self, size: int) -> None:
+        now = time.monotonic()
+        with self._lock:
+            self._samples.append((now, size))
+            self._trim(now)
+
+    def speed(self) -> float:
+        now = time.monotonic()
+        with self._lock:
+            self._trim(now)
+            return sum(size for _, size in self._samples) / self._window
 
 
 def _lib() -> LibraryService:
@@ -365,6 +395,8 @@ def update_install():
 
             digest = hashlib.sha256()
             downloaded = 0
+            meter = _SpeedMeter()
+            file_name = Path(url.split("?", 1)[0]).name or "update"
             with http.get(url, stream=True, timeout=120) as resp:
                 if resp.status_code != 200:
                     raise RuntimeError(f"HTTP {resp.status_code}")
@@ -376,8 +408,14 @@ def update_install():
                         f.write(chunk)
                         digest.update(chunk)
                         downloaded += len(chunk)
-                        if total > 0:
-                            _task_progress(task_id, min(95, int(downloaded * 95 / total)))
+                        meter.add(len(chunk))
+                        _task_progress(
+                            task_id,
+                            min(95, int(downloaded * 95 / total)) if total > 0 else None,
+                            file=file_name,
+                            speed=meter.speed(),
+                        )
+            _task_progress(task_id, speed=0)
 
             if size and downloaded != size:
                 raise RuntimeError(f"size mismatch: expected {size}, got {downloaded}")
@@ -657,15 +695,22 @@ def library_download():
                     return
                 total = int(resp.headers.get("Content-Length") or 0)
                 downloaded = 0
+                meter = _SpeedMeter()
                 with archive_path.open("wb") as f:
                     for chunk in resp.iter_content(chunk_size=1024 * 256):
                         if not chunk:
                             continue
                         f.write(chunk)
                         downloaded += len(chunk)
-                        if total > 0:
-                            _task_progress(task_id, min(90, int(downloaded * 90 / total)))
+                        meter.add(len(chunk))
+                        _task_progress(
+                            task_id,
+                            min(90, int(downloaded * 90 / total)) if total > 0 else None,
+                            file=archive_path.name,
+                            speed=meter.speed(),
+                        )
 
+            _task_progress(task_id, speed=0)
             lib.install_or_update_build(item, archive_path, source_item=source_item)
             _task_progress(task_id, 100)
             _task_done(task_id)
@@ -784,6 +829,7 @@ def tasks_active_downloads():
 
 _play_state: dict = {"state": "idle", "status": "", "error": None}
 _play_lock = threading.Lock()
+_play_meter: _SpeedMeter | None = None
 
 _MOD_FAILURE_MARKERS = (
     "---- Minecraft Crash Report ----",
@@ -814,8 +860,11 @@ def _friendly_play_error(exc: Exception) -> str:
 
 @app.get("/play/state")
 def play_state():
+    meter = _play_meter
     with _play_lock:
-        return jsonify({k: v for k, v in _play_state.items() if k != "_proc"})
+        data = {k: v for k, v in _play_state.items() if k != "_proc"}
+    data["speed"] = meter.speed() if meter else 0
+    return jsonify(data)
 
 
 @app.post("/play/start")
@@ -825,8 +874,16 @@ def play_start():
             return jsonify({"ok": False, "error": "already_running"})
 
     def run():
+        global _play_meter
         from services.play_service import PlayService
+        from minecraft.mc_client import set_download_listener
         service = PlayService()
+        meter = _SpeedMeter()
+
+        def on_download_bytes(name: str, size: int):
+            meter.add(size)
+            with _play_lock:
+                _play_state["file"] = name
 
         def set_status(msg):
             with _play_lock:
@@ -841,7 +898,9 @@ def play_start():
                 _play_state["progress"] = max(0, min(100, p))
 
         with _play_lock:
-            _play_state.update({"state": "running", "status": "Подготовка...", "error": None, "progress": 0})
+            _play_state.update({"state": "running", "status": "Подготовка...", "error": None, "progress": 0, "file": None})
+        _play_meter = meter
+        set_download_listener(on_download_bytes)
 
         try:
             settings = load_settings()
@@ -949,6 +1008,11 @@ def play_start():
             print(f"[play] launch failed: {type(exc).__name__}: {exc}", flush=True)
             with _play_lock:
                 _play_state.update({"state": "error", "error": _friendly_play_error(exc)})
+        finally:
+            set_download_listener(None)
+            _play_meter = None
+            with _play_lock:
+                _play_state["file"] = None
 
     threading.Thread(target=run, daemon=True).start()
     return jsonify({"ok": True})

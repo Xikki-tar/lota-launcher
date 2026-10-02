@@ -19,7 +19,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from auth.api_base import get_api_base
 from auth.auth_storage import get_data_dir, load_auth_data, load_settings, save_settings
 from auth.java_finder import find_java_candidates, get_java_major_version, get_java_version
-from minecraft.mc_client import ensure_forge_version, prepare_version
+from minecraft.mc_client import ensure_forge_version, prepare_version, report_download_bytes
 from minecraft.mc_launch import build_launch_spec
 from services.library_service import LibraryService
 from desktop_integration import windows_hidden_subprocess_kwargs
@@ -474,6 +474,7 @@ class PlayService:
                         continue
                     output.write(chunk)
                     downloaded += len(chunk)
+                    report_download_bytes(archive_path.name, len(chunk))
                     if progress and total > 0:
                         progress(max(0, min(100, int(downloaded * 100 / total))))
 
@@ -537,6 +538,7 @@ class PlayService:
                         continue
                     output.write(chunk)
                     downloaded += len(chunk)
+                    report_download_bytes(dest.name, len(chunk))
                     if progress and total > 0:
                         progress(max(0, min(100, int(downloaded * 100 / total))))
 

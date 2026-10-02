@@ -43,7 +43,24 @@ DOWNLOAD_BACKOFF_SECONDS = 0.7
 
 ProgressCallback = Callable[[int, int], None] | None
 StatusCallback = Callable[[str], None] | None
+DownloadListener = Callable[[str, int], None] | None
 _thread_local = threading.local()
+_download_listener: DownloadListener = None
+
+
+def set_download_listener(listener: DownloadListener) -> None:
+    global _download_listener
+    _download_listener = listener
+
+
+def report_download_bytes(name: str, size: int) -> None:
+    listener = _download_listener
+    if listener is None:
+        return
+    try:
+        listener(name, size)
+    except Exception:
+        pass
 
 
 def _download_worker_count() -> int:
@@ -202,6 +219,7 @@ def _download_file(url: str, dest: Path, size: int | None = None, sha1: str | No
                         for chunk in r.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
                             if chunk:
                                 f.write(chunk)
+                                report_download_bytes(dest.name, len(chunk))
                 if not _valid_file(tmp, size, sha1):
                     raise RuntimeError(f"Downloaded file validation failed: {dest.name}")
                 tmp.replace(dest)

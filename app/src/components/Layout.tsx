@@ -3,7 +3,8 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useBackend, apiGet, apiPost, invalidateCache } from "../lib/BackendContext";
 import { useI18n } from "../lib/I18nContext";
 import { win } from "../lib/tauri";
-import { startFakeProgress, applyRealProgress, stopTracking, useProgress } from "../lib/progressStore";
+import { startFakeProgress, applyRealProgress, stopTracking, setProgressMeta, useProgress } from "../lib/progressStore";
+import DownloadProgress from "./DownloadProgress";
 import styles from "./Layout.module.css";
 
 const PLAY_PROGRESS_ID = "play-start";
@@ -21,6 +22,8 @@ export interface PlayState {
   progress?: number;
   error?: string | null;
   pid?: number | null;
+  file?: string | null;
+  speed?: number;
 }
 
 export interface PageContext {
@@ -146,6 +149,13 @@ export default function Layout({ onLogout }: LayoutProps) {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [port]);
 
+  const preparing = (playState.state ?? "idle") === "running";
+  useEffect(() => {
+    if (!preparing) return;
+    const id = setInterval(pollPlayState, 1000);
+    return () => clearInterval(id);
+  }, [preparing, port]);
+
   async function loadDebugMode() {
     try {
       const s = await apiGet<{ debug_mode?: boolean }>(port, "/settings", 0);
@@ -167,6 +177,7 @@ export default function Layout({ onLogout }: LayoutProps) {
 
       const newState = data.state ?? "idle";
       if (newState === "running") {
+        setProgressMeta(PLAY_PROGRESS_ID, { file: data.file ?? null, speed: data.speed ?? 0 });
         if (typeof data.progress === "number" && data.progress > 0) {
           applyRealProgress(PLAY_PROGRESS_ID, data.progress);
         }
@@ -274,11 +285,7 @@ export default function Layout({ onLogout }: LayoutProps) {
             {(isPreparing || isLaunched || isError) && (
               <div className={`${styles.playStatus} ${isError ? styles.playError : ""}`}>
                 {statusText}
-                {isPreparing && progress > 0 && (
-                  <div className={styles.progressBar}>
-                    <div className={styles.progressFill} style={{ width: `${progress}%` }} />
-                  </div>
-                )}
+                {isPreparing && progress > 0 && <DownloadProgress id={PLAY_PROGRESS_ID} />}
               </div>
             )}
 
