@@ -1,9 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-// на Windows каждый запуск лаунчера сперва отдаёт управление updater.exe
-// сам себя лаунчер подменить не может пока живой а апдейтер может раз он
-// не запущен из того файла, который меняем если updater.exe не нашёлся или
-// обосрался при запуске похуй не блокируем юзера работаем как обычно
 #[cfg(target_os = "windows")]
 fn windows_cleanup_stray_appdata_dirs() {
     use std::path::PathBuf;

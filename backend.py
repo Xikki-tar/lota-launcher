@@ -7,6 +7,7 @@ import platform
 import socket
 import ssl
 import tempfile
+import itertools
 import threading
 import time
 from collections import deque
@@ -90,22 +91,35 @@ def _log_action():
         return
     print(f"[action] {request.method} {path}", flush=True)
 
-_log_lines: list[str] = []
-_log_lock = threading.Lock()
 _LOG_MAX = 2000
+_LOG_FILE_MAX_BYTES = 5 * 1024 * 1024
+_log_lines: deque[str] = deque(maxlen=_LOG_MAX)
+_log_total = 0
+_log_lock = threading.Lock()
 
-try:
-    _log_file = (get_data_dir() / "launcher.log").open("a", encoding="utf-8")
-except Exception:
-    _log_file = None
+
+def _open_launcher_log():
+    path = get_data_dir() / "launcher.log"
+    try:
+        if path.exists() and path.stat().st_size > _LOG_FILE_MAX_BYTES:
+            path.replace(path.with_name("launcher.log.1"))
+    except OSError:
+        pass
+    try:
+        return path.open("a", encoding="utf-8")
+    except Exception:
+        return None
 
 
-def _log_append(line: str) -> None:
+_log_file = _open_launcher_log()
+
+
+def _log_append(line: str, persist: bool = True) -> None:
+    global _log_total
     with _log_lock:
         _log_lines.append(line)
-        if len(_log_lines) > _LOG_MAX:
-            del _log_lines[:len(_log_lines) - _LOG_MAX]
-        if _log_file is not None:
+        _log_total += 1
+        if persist and _log_file is not None:
             try:
                 _log_file.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {line}\n")
                 _log_file.flush()
@@ -554,8 +568,12 @@ def _proxy_get(path: str, params: dict) -> tuple[dict, int]:
 def debug_logs():
     since = int(request.args.get("since", 0))
     with _log_lock:
-        total = len(_log_lines)
-        lines = _log_lines[since:] if since < total else []
+        total = _log_total
+        first = total - len(_log_lines)
+        if since > total:
+            since = 0
+        start = max(since, first)
+        lines = list(itertools.islice(_log_lines, start - first, None)) if start < total else []
     return jsonify({"lines": lines, "total": total})
 
 
@@ -994,9 +1012,8 @@ def play_start():
                     with log_path.open("w", encoding="utf-8") as log_file:
                         for line in proc.stdout:
                             clean = line.rstrip()
-                            _log_append("[MC] " + clean)
+                            _log_append("[MC] " + clean, persist=False)
                             log_file.write(clean + "\n")
-                            log_file.flush()
                             if any(marker in clean for marker in _MOD_FAILURE_MARKERS):
                                 with _play_lock:
                                     if not _play_state.get("mod_error"):

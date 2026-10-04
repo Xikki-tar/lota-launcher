@@ -5,6 +5,7 @@ import { useI18n } from "../lib/I18nContext";
 import type { PageContext } from "../components/Layout";
 import LoadingDots from "../components/LoadingDots";
 import styles from "./Friends.module.css";
+import { isAppHidden } from "../lib/appVisibility";
 
 const RANK_GRADIENTS: Record<number, [string, string]> = {
   1: ["#269ff5", "#005eff"],
@@ -193,7 +194,7 @@ export default function Friends() {
 
   useEffect(() => {
     load();
-    pollRef.current = setInterval(load, 7_000);
+    pollRef.current = setInterval(() => { if (!isAppHidden()) load(); }, 7_000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [port]);
 

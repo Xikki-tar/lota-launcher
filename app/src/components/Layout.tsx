@@ -5,6 +5,7 @@ import { useI18n } from "../lib/I18nContext";
 import { win } from "../lib/tauri";
 import { startFakeProgress, applyRealProgress, stopTracking, setProgressMeta, useProgress } from "../lib/progressStore";
 import DownloadProgress from "./DownloadProgress";
+import { isAppHidden, setAppHidden } from "../lib/appVisibility";
 import styles from "./Layout.module.css";
 
 const PLAY_PROGRESS_ID = "play-start";
@@ -58,7 +59,7 @@ function DebugConsole({ port }: { port: number | null }) {
 
   useEffect(() => {
     async function poll() {
-      if (!port) return;
+      if (!port || isAppHidden()) return;
       try {
         const res = await fetch(
           `http://127.0.0.1:${port}/debug/logs?since=${offsetRef.current}`
@@ -189,8 +190,10 @@ export default function Layout({ onLogout }: LayoutProps) {
 
       const prevState = prevPlayStateRef.current;
       if (newState === "launched" && prevState !== "launched") {
-        win.hide().catch(() => {});
+        setAppHidden(true);
+        win.hideUntilGameExit().catch(() => {});
       } else if (prevState === "launched" && newState !== "launched") {
+        setAppHidden(false);
         win.show().catch(() => {});
       }
       prevPlayStateRef.current = newState;

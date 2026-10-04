@@ -4,8 +4,6 @@ use std::collections::HashMap;
 
 use crate::{api, store};
 
-// ── Stored data ───────────────────────────────────────────────────────────────
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AuthData {
     pub token: String,
@@ -20,8 +18,6 @@ pub struct RegisterLink {
     pub link_token: String,
     pub telegram_url: String,
 }
-
-// ── Config commands ───────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub fn auth_load() -> Option<AuthData> {
@@ -85,16 +81,12 @@ pub fn register_link_clear() {
     store::remove_section("register");
 }
 
-// ── API response type ─────────────────────────────────────────────────────────
-
 #[derive(Serialize)]
 pub struct ApiResult {
     pub ok: bool,
     pub status: u16,
     pub data: Value,
 }
-
-// ── API commands ──────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn api_login(username: String, code: String) -> Result<ApiResult, String> {
