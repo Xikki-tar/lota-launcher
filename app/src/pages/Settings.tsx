@@ -12,6 +12,7 @@ import { checkForUpdate, isInAppUpdateMode, type UpdateCheckResult, type UpdateM
 import styles from "./Settings.module.css";
 
 const LANGUAGES = ["Українська", "Русский", "English"];
+const IS_LINUX = navigator.userAgent.includes("Linux");
 
 interface SettingsData {
   language?: string;
@@ -37,6 +38,8 @@ export default function Settings() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [javaInfo, setJavaInfo] = useState<{ path: string; major: number | null; found: boolean } | null>(null);
   const [javaList, setJavaList] = useState<JavaCandidate[]>([]);
   const [scanning, setScanning] = useState(false);
   const [themesNote, setThemesNote] = useState(false);
@@ -109,7 +112,25 @@ export default function Settings() {
     finally { setLoading(false); }
   }
 
+  useEffect(() => {
+    const path = (form.java_path ?? "").trim();
+    if (!path || !port) { setJavaInfo(null); return; }
+    const timer = setTimeout(() => {
+      apiGet<{ path: string; major: number | null; found: boolean }>(port, `/java/version?path=${encodeURIComponent(path)}`, 0)
+        .then(info => setJavaInfo({ ...info, path }))
+        .catch(() => setJavaInfo(null));
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [form.java_path, port]);
+
   async function save() {
+    const memMin = form.mem_min_mb ?? 1024;
+    const memMax = form.mem_max_mb ?? 4096;
+    if (memMin > memMax) {
+      setSaveError(t("settings_memory_warning", "Минимальный объём не может быть больше максимального."));
+      return;
+    }
+    setSaveError("");
     setSaving(true);
     try {
       await apiPost(port, "/settings", form);
@@ -142,12 +163,15 @@ export default function Settings() {
   function set<K extends keyof SettingsData>(key: K, value: SettingsData[K]) {
     setForm(prev => ({ ...prev, [key]: value }));
     setSaved(false);
+    setSaveError("");
   }
 
-  const selectedJava = javaList.find(c => c.path === form.java_path);
-  const javaVersionLabel = selectedJava
-    ? `${t("settings_java_version", "Версия:")} Java ${selectedJava.major ?? "?"}`
-    : t("settings_java_version", "Версия: —");
+  const javaPath = (form.java_path ?? "").trim();
+  const javaVersionLabel = !javaPath || !javaInfo || javaInfo.path !== javaPath
+    ? t("settings_java_version", "Версия: —")
+    : javaInfo.found
+      ? t("settings_java_version_value", "Версия: Java {major}").replace("{major}", String(javaInfo.major ?? "?"))
+      : t("settings_java_not_found", "Версия: Java не найдена");
 
   return (
     <div className="innerLayout">
@@ -270,14 +294,16 @@ export default function Settings() {
                   onChange={e => set("jvm_args", e.target.value)}
                 />
 
-                <label className={styles.checkRow}>
-                  <input
-                    type="checkbox"
-                    checked={form.disable_openal ?? false}
-                    onChange={e => set("disable_openal", e.target.checked)}
-                  />
-                  <span>{t("settings_disable_openal", "Использовать системный OpenAL")}</span>
-                </label>
+                {IS_LINUX && (
+                  <label className={styles.checkRow}>
+                    <input
+                      type="checkbox"
+                      checked={form.disable_openal ?? false}
+                      onChange={e => set("disable_openal", e.target.checked)}
+                    />
+                    <span>{t("settings_disable_openal", "Использовать системный OpenAL")}</span>
+                  </label>
+                )}
               </fieldset>
 
               <fieldset className={styles.group}>
@@ -340,6 +366,7 @@ export default function Settings() {
         <div style={{ flex: 1 }} />
 
         {saved && <div className={styles.savedMsg}>{t("settings_saved_title", "Сохранено")}!</div>}
+        {saveError && <div className={styles.saveError}>{saveError}</div>}
 
         <button className={styles.btnSave} onClick={save} disabled={saving || loading}>
           {saving ? "Сохранение..." : t("btn_save", "Сохранить")}

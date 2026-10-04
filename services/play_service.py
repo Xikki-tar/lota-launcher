@@ -127,6 +127,34 @@ def _creationflags_no_window() -> int:
     return int(windows_hidden_subprocess_kwargs().get("creationflags", 0) or 0)
 
 
+MIN_JAVA_MAJOR = 17
+SYSTEM_OPENAL_CANDIDATES = (
+    "/usr/lib/libopenal.so.1",
+    "/usr/lib64/libopenal.so.1",
+    "/usr/lib/x86_64-linux-gnu/libopenal.so.1",
+    "/usr/lib/aarch64-linux-gnu/libopenal.so.1",
+)
+
+
+def resolve_custom_java(java_path: str) -> str:
+    java_path = str(java_path or "").strip()
+    if not java_path or not _is_executable(java_path):
+        raise RuntimeError(t("play_error_java"))
+    major = get_java_major_version(java_path)
+    if major is not None and major < MIN_JAVA_MAJOR:
+        raise RuntimeError(t("play_error_java_old").format(major=major, required=MIN_JAVA_MAJOR))
+    return java_path
+
+
+def system_openal_jvm_args(jvm_args: str) -> str:
+    if platform.system() != "Linux" or "-Dorg.lwjgl.openal.libname=" in jvm_args:
+        return jvm_args
+    lib = next((path for path in SYSTEM_OPENAL_CANDIDATES if os.path.exists(path)), None)
+    if not lib:
+        return jvm_args
+    return f"{jvm_args} -Dorg.lwjgl.openal.libname={lib}".strip()
+
+
 def _prefer_java_21(java_path: str) -> str:
     current_major = get_java_major_version(java_path) if java_path and _is_executable(java_path) else None
     if current_major == 21:
