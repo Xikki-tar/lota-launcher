@@ -111,6 +111,8 @@ export default function Layout({ onLogout }: LayoutProps) {
   const [playState, setPlayState] = useState<PlayState>({ state: "idle" });
   const [playBusy, setPlayBusy] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const profileRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const prevPlayStateRef = useRef<string>("idle");
 
@@ -216,7 +218,24 @@ export default function Layout({ onLogout }: LayoutProps) {
     }
   }
 
+  useEffect(() => {
+    if (!profileMenuOpen) return;
+    function onPointerDown(e: MouseEvent) {
+      if (profileRef.current && !profileRef.current.contains(e.target as Node)) setProfileMenuOpen(false);
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setProfileMenuOpen(false);
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [profileMenuOpen]);
+
   async function handleLogout() {
+    setProfileMenuOpen(false);
     await apiPost(port, "/auth/clear").catch(() => {});
     invalidateCache();
     onLogout();
@@ -303,13 +322,24 @@ export default function Layout({ onLogout }: LayoutProps) {
 
             <div className={styles.spacer} />
 
-            <div
-              className={styles.profileCard}
-              onClick={() => navigateAnimated("/account")}
-              title="Аккаунт"
-            >
-              <SkinHead port={port} username={username} />
-              <div className={styles.profileName}>{username}</div>
+            <div className={styles.profileWrap} ref={profileRef}>
+              {profileMenuOpen && (
+                <div className={styles.profileMenu}>
+                  <button className={`${styles.profileMenuItem} ${styles.profileMenuDanger}`} onClick={handleLogout}>
+                    {t("profile_logout", "Выйти из аккаунта")}
+                  </button>
+                  <button className={styles.profileMenuItem} onClick={() => setProfileMenuOpen(false)}>
+                    {t("profile_add_account", "Добавить аккаунт")}
+                  </button>
+                </div>
+              )}
+              <div
+                className={`${styles.profileCard} ${profileMenuOpen ? styles.profileCardActive : ""}`}
+                onClick={() => setProfileMenuOpen(open => !open)}
+              >
+                <SkinHead port={port} username={username} />
+                <div className={styles.profileName}>{username}</div>
+              </div>
             </div>
 
             <button className={styles.btnExit} onClick={() => win.close()}>
