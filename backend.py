@@ -56,6 +56,9 @@ from auth.auth_storage import (
 )
 from auth.api_base import get_api_base
 from services.library_service import LibraryService
+from window.i18n import set_language
+
+set_language()
 
 app = Flask(__name__)
 app.config["JSON_SORT_KEYS"] = False
@@ -484,6 +487,7 @@ def settings_save():
     settings = load_settings()
     settings.update(body)
     save_settings(settings)
+    set_language(str(settings.get("language") or ""))
     return jsonify({"ok": True})
 
 
@@ -494,6 +498,17 @@ def i18n():
     lang = str(settings.get("language") or "Русский")
     trans = TRANSLATIONS.get(lang) or TRANSLATIONS.get("Русский") or {}
     return jsonify({"language": lang, "strings": trans})
+
+
+@app.get("/java/version")
+def java_version():
+    import shutil
+    from auth.java_finder import get_java_major_version, is_executable
+    path = str(request.args.get("path") or "").strip()
+    resolved = path if path and is_executable(path) else (shutil.which(path) if path else None)
+    if not resolved:
+        return jsonify({"path": path, "major": None, "found": False})
+    return jsonify({"path": path, "major": get_java_major_version(resolved), "found": True})
 
 
 @app.get("/java/scan")
@@ -915,9 +930,12 @@ def play_start():
                 return
             print(f"[play] build selected: {build_key}", flush=True)
 
-            java_path = service.ensure_oracle_java_21(status=set_status, progress=set_progress)
-            if not java_path:
-                java_path = str(settings.get("java_path") or "")
+            from services.play_service import resolve_custom_java, system_openal_jvm_args
+            custom_java = str(settings.get("java_path") or "").strip()
+            if settings.get("auto_java_version", True) or not custom_java:
+                java_path = service.ensure_oracle_java_21(status=set_status, progress=set_progress)
+            else:
+                java_path = resolve_custom_java(custom_java)
             print(f"[play] java_path: {java_path}", flush=True)
 
             set_status("Запуск...")
@@ -941,9 +959,11 @@ def play_start():
                 auth = load_auth_data() or {}
                 username = str(settings.get("offline_username") or auth.get("username") or "Player")
 
-                mem_min = int(settings.get("mem_min_mb") or 1024)
                 mem_max = int(settings.get("mem_max_mb") or 4096)
+                mem_min = min(int(settings.get("mem_min_mb") or 1024), mem_max)
                 jvm_args = str(settings.get("jvm_args") or "")
+                if settings.get("disable_openal"):
+                    jvm_args = system_openal_jvm_args(jvm_args)
 
                 spec = build_launch_spec(
                     prepared=prepared,

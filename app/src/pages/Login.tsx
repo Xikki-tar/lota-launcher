@@ -75,18 +75,18 @@ function RegisterModal({ port, onClose, onSuccess }: RegisterModalProps) {
   async function doPoll(token: string) {
     try {
       const res = await apiGet<ApiResp>(port, `/register/poll?link_token=${encodeURIComponent(token)}`, 0);
-      if (!res.ok && res.status === 0) { stopPolling(); setError("Нет подключения к серверу."); return; }
-      if (res.status === 404) { stopPolling(); resetToChoice(); setError("Ссылка не найдена. Создайте новую."); return; }
+      if (!res.ok && res.status === 0) { stopPolling(); setError(t("toast_no_connection", "Нет подключения к серверу.")); return; }
+      if (res.status === 404) { stopPolling(); resetToChoice(); setError(t("register_invalid_link", "Ссылка не найдена. Создайте новую.")); return; }
       if (!res.ok) return;
       const status = extractStatus(res.data);
       if (status === "pending") { setError(""); return; }
       if (["verified", "confirmed", "approved", "success"].includes(status)) { stopPolling(); setError(""); setStep("complete"); return; }
-      if (status === "expired") { stopPolling(); resetToChoice(); setError("Ссылка истекла. Запросите новую."); return; }
-      if (status === "denied") { stopPolling(); resetToChoice(); setError("Регистрация отклонена."); return; }
-      if (status === "completed") { stopPolling(); resetToChoice(); setError("Эта регистрация уже завершена."); }
+      if (status === "expired") { stopPolling(); resetToChoice(); setError(t("register_link_expired", "Ссылка истекла. Запросите новую.")); return; }
+      if (status === "denied") { stopPolling(); resetToChoice(); setError(t("register_denied", "Регистрация отклонена.")); return; }
+      if (status === "completed") { stopPolling(); resetToChoice(); setError(t("register_already_completed", "Эта регистрация уже завершена.")); }
     } catch {
       stopPolling();
-      setError("Нет подключения к серверу.");
+      setError(t("toast_no_connection", "Нет подключения к серверу."));
     }
   }
 
@@ -102,30 +102,30 @@ function RegisterModal({ port, onClose, onSuccess }: RegisterModalProps) {
   async function requestTelegramLink() {
     if (linkToken && telegramUrl) { setStep("waiting"); setError(""); startPolling(linkToken); return; }
     setStep("waiting");
-    setError("Создаю ссылку...");
+    setError(t("register_creating_link", "Создаю ссылку..."));
     setBusy(true);
     try {
       const res = await apiPost<ApiResp>(port, "/register/telegram-link");
       setBusy(false);
-      if (!res.ok || res.status === 0) { resetToChoice(); setError("Нет подключения к серверу."); return; }
-      if (res.status === 429) { resetToChoice(); setError("Слишком много запросов. Попробуйте позже."); return; }
-      if (res.status !== 200) { resetToChoice(); setError("Ошибка сервера."); return; }
+      if (!res.ok || res.status === 0) { resetToChoice(); setError(t("toast_no_connection", "Нет подключения к серверу.")); return; }
+      if (res.status === 429) { resetToChoice(); setError(t("register_rate_limited", "Слишком много запросов. Попробуйте позже.")); return; }
+      if (res.status !== 200) { resetToChoice(); setError(t("error_server", "Ошибка сервера.")); return; }
       const token = String(res.data.link_token ?? "").trim();
       const url = normalizeTelegramUrl(String(res.data.telegram_url ?? "").trim());
-      if (!token || !url) { resetToChoice(); setError("Ошибка сервера."); return; }
+      if (!token || !url) { resetToChoice(); setError(t("error_server", "Ошибка сервера.")); return; }
       setLinkToken(token); setTelegramUrl(url);
       await apiPost(port, "/register/link", { link_token: token, telegram_url: url });
       setError(""); startPolling(token);
-    } catch { setBusy(false); resetToChoice(); setError("Нет подключения к серверу."); }
+    } catch { setBusy(false); resetToChoice(); setError(t("toast_no_connection", "Нет подключения к серверу.")); }
   }
 
   async function completeRegistration() {
-    if (!username.trim()) { setError("Введите никнейм."); return; }
+    if (!username.trim()) { setError(t("error_enter_login", "Введите никнейм.")); return; }
     setBusy(true); setError("");
     try {
       const res = await apiPost<ApiResp>(port, "/register/complete", { link_token: linkToken, username: username.trim() });
       setBusy(false);
-      if (!res.ok && res.status === 0) { setError("Нет подключения к серверу."); return; }
+      if (!res.ok && res.status === 0) { setError(t("toast_no_connection", "Нет подключения к серверу.")); return; }
       if (res.status === 200 && res.ok) {
         await apiDelete(port, "/register/link").catch(() => {});
         await apiPost(port, "/auth/save", {
@@ -140,14 +140,14 @@ function RegisterModal({ port, onClose, onSuccess }: RegisterModalProps) {
         return;
       }
       const err = String(res.data.error ?? "").trim().toLowerCase();
-      if (res.status === 412) { setError("Ник обязателен."); return; }
-      if (res.status === 409 && err === "username_taken") { setError("Ник уже занят."); return; }
-      if (res.status === 409 && err === "telegram_not_verified") { setError("Telegram ещё не подтверждён."); return; }
-      if (res.status === 409) { setError("Эта регистрация уже завершена."); return; }
-      if (res.status === 410) { resetToChoice(); setError("Ссылка истекла. Запросите новую."); return; }
-      if (res.status === 400 && err.startsWith("bad_username")) { setError("Ник 4-32 символа, только латиница, цифры и _."); return; }
-      setError("Ошибка сервера.");
-    } catch { setBusy(false); setError("Нет подключения к серверу."); }
+      if (res.status === 412) { setError(t("register_username_required", "Ник обязателен.")); return; }
+      if (res.status === 409 && err === "username_taken") { setError(t("register_username_taken", "Ник уже занят.")); return; }
+      if (res.status === 409 && err === "telegram_not_verified") { setError(t("register_not_verified", "Telegram ещё не подтверждён.")); return; }
+      if (res.status === 409) { setError(t("register_already_completed", "Эта регистрация уже завершена.")); return; }
+      if (res.status === 410) { resetToChoice(); setError(t("register_link_expired", "Ссылка истекла. Запросите новую.")); return; }
+      if (res.status === 400 && err.startsWith("bad_username")) { setError(t("register_username_invalid", "Ник 4-32 символа, только латиница, цифры и _.")); return; }
+      setError(t("error_server", "Ошибка сервера."));
+    } catch { setBusy(false); setError(t("toast_no_connection", "Нет подключения к серверу.")); }
   }
 
   function openTelegram() {
@@ -211,13 +211,13 @@ export default function Login({ onLogin }: LoginProps) {
   const [showRegister, setShowRegister] = useState(false);
 
   async function handleLogin() {
-    if (!username.trim()) { setError("Введите никнейм."); return; }
-    if (!code.trim()) { setError("Введите пароль."); return; }
+    if (!username.trim()) { setError(t("error_enter_login", "Введите никнейм.")); return; }
+    if (!code.trim()) { setError(t("error_enter_code", "Введите пароль.")); return; }
     setBusy(true); setError("");
     try {
       const res = await apiPost<ApiResp>(port, "/login", { username: username.trim(), code: code.trim() });
       setBusy(false);
-      if (!res.ok && res.status === 0) { setError("Нет подключения к серверу."); return; }
+      if (!res.ok && res.status === 0) { setError(t("toast_no_connection", "Нет подключения к серверу.")); return; }
       if (res.status === 200 && res.ok) {
         const d = res.data;
         await apiPost(port, "/auth/save", {
@@ -232,16 +232,16 @@ export default function Login({ onLogin }: LoginProps) {
         return;
       }
       const err = String(res.data.error ?? "").trim().toLowerCase();
-      if (err === "missing_username") { setError("Введите никнейм."); return; }
-      if (err === "missing_code") { setError("Введите пароль."); return; }
-      if (err === "user_not_found") { setError("Пользователь не найден."); return; }
-      if (err === "invalid_credentials") { setError("Неверный пароль."); return; }
-      if (err === "inactive") { setError("Аккаунт заблокирован."); return; }
-      if (res.status >= 500) { setError("Ошибка сервера. Попробуйте позже."); return; }
-      setError("Ошибка авторизации.");
+      if (err === "missing_username") { setError(t("error_enter_login", "Введите никнейм.")); return; }
+      if (err === "missing_code") { setError(t("error_enter_code", "Введите пароль.")); return; }
+      if (err === "user_not_found") { setError(t("error_bad_login", "Пользователь не найден.")); return; }
+      if (err === "invalid_credentials") { setError(t("error_bad_code", "Неверный пароль.")); return; }
+      if (err === "inactive") { setError(t("error_inactive_account", "Аккаунт заблокирован.")); return; }
+      if (res.status >= 500) { setError(t("error_server", "Ошибка сервера. Попробуйте позже.")); return; }
+      setError(t("error_auth", "Ошибка авторизации."));
     } catch {
       setBusy(false);
-      setError("Нет подключения к серверу.");
+      setError(t("toast_no_connection", "Нет подключения к серверу."));
     }
   }
 

@@ -147,10 +147,10 @@ function AddFriendDialog({ port, onClose, onSuccess }: {
       const err = String((res.data as Record<string, unknown>)?.error ?? "").toLowerCase();
       const map: Record<string, string> = {
         user_not_found:       t("friends_search_not_found", "Пользователь не найден."),
-        already_friends:      t("friends_section_friends", "Вы уже друзья."),
-        request_already_sent: "Запрос уже отправлен.",
-        cannot_add_self:      "Нельзя добавить себя.",
-        self_request:         "Нельзя добавить себя.",
+        already_friends:      t("friends_error_already_friends", "Этот пользователь уже у тебя в друзьях."),
+        request_already_sent: t("friends_error_request_sent", "Заявка уже отправлена."),
+        cannot_add_self:      t("friends_error_self", "Нельзя отправить заявку самому себе."),
+        self_request:         t("friends_error_self", "Нельзя отправить заявку самому себе."),
       };
       setStatusMsg(map[err] ?? t("error_server", "Ошибка сервера."));
     } catch { setBusy(false); setStatusMsg(t("toast_no_connection", "Нет подключения к серверу.")); }
