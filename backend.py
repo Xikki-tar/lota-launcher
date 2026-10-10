@@ -93,16 +93,42 @@ def _log_action():
     print(f"[action] {request.method} {path}", flush=True)
 
 _LOG_MAX = 2000
-_LOG_FILE_MAX_BYTES = 5 * 1024 * 1024
 _log_lines: deque[str] = deque(maxlen=_LOG_MAX)
 _log_total = 0
 _log_lock = threading.Lock()
 
 
+_LOGS_KEEP = 5
+
+
+def _prune_files(directory: Path, pattern: str, keep: int = _LOGS_KEEP) -> None:
+    try:
+        files = [p for p in directory.glob(pattern) if p.is_file()]
+    except OSError:
+        return
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    for old in files[keep:]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+
+
+def _prune_launcher_logs() -> None:
+    logs_dir = get_data_dir() / "logs"
+    for pattern in ("minecraft_*.log", "launch_failed_*.log", "launcher_*.log"):
+        _prune_files(logs_dir, pattern)
+
+
+def _prune_game_logs(game_dir: Path) -> None:
+    _prune_files(game_dir / "logs", "*.log.gz")
+    _prune_files(game_dir / "crash-reports", "crash-*.txt")
+
+
 def _open_launcher_log():
     path = get_data_dir() / "launcher.log"
     try:
-        if path.exists() and path.stat().st_size > _LOG_FILE_MAX_BYTES:
+        if path.exists():
             path.replace(path.with_name("launcher.log.1"))
     except OSError:
         pass
@@ -113,6 +139,7 @@ def _open_launcher_log():
 
 
 _log_file = _open_launcher_log()
+_prune_launcher_logs()
 
 
 def _log_append(line: str, persist: bool = True) -> None:
@@ -1192,6 +1219,8 @@ def play_start():
                 log_path.parent.mkdir(parents=True, exist_ok=True)
                 report.add(f"minecraft log: {log_path}")
                 report.write_to(log_path)
+                _prune_launcher_logs()
+                _prune_game_logs(game_dir)
 
                 def _pipe_mc_logs():
                     with log_path.open("a", encoding="utf-8") as log_file:
@@ -1238,6 +1267,7 @@ def play_start():
             failed_log = get_data_dir() / "logs" / f"launch_failed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
             failed_log.parent.mkdir(parents=True, exist_ok=True)
             report.write_to(failed_log)
+            _prune_launcher_logs()
             print(f"[launch] report saved: {failed_log}", flush=True)
             with _play_lock:
                 _play_state.update({"state": "error", "error": _friendly_play_error(exc)})
