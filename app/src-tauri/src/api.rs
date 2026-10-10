@@ -6,7 +6,10 @@ use serde_json::Value;
 
 use crate::store;
 
-const DEFAULT_API_BASES: &[&str] = &["https://ru.lota.work", "https://eu.lota.work"];
+const DEFAULT_API_BASES: &str = match option_env!("LOTA_BUILD_API_BASES") {
+    Some(v) => v,
+    None => "https://ru.lota.work,https://eu.lota.work",
+};
 const PROBE_TIMEOUT_SECS: u64 = 3;
 const CACHE_TTL_SECS: u64 = 300;
 
@@ -20,39 +23,44 @@ static CACHE: Mutex<ApiCache> = Mutex::new(ApiCache {
     until: None,
 });
 
+fn split_into(list: &mut Vec<String>, raw: &str) {
+    for part in raw.replace(';', ",").split(',') {
+        let s = part.trim().trim_end_matches('/').to_string();
+        if !s.is_empty() {
+            list.push(s);
+        }
+    }
+}
+
+fn dedup(mut list: Vec<String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    list.retain(|s| seen.insert(s.to_lowercase()));
+    list
+}
+
 fn candidates() -> Vec<String> {
+    let mut env_list: Vec<String> = Vec::new();
+    for key in &["LOTA_API_BASES", "LOTA_API_BASE"] {
+        if let Ok(v) = std::env::var(key) {
+            split_into(&mut env_list, &v);
+        }
+    }
+    if !env_list.is_empty() {
+        return dedup(env_list);
+    }
+
     let settings = store::read_section("client");
     let mut list: Vec<String> = Vec::new();
 
     for key in &["api_base_urls", "api_base_url"] {
         if let Some(v) = settings.get(*key) {
-            for part in v.replace(';', ",").split(',') {
-                let s = part.trim().trim_end_matches('/').to_string();
-                if !s.is_empty() {
-                    list.push(s);
-                }
-            }
+            split_into(&mut list, v);
         }
     }
 
-    for key in &["LOTA_API_BASES", "LOTA_API_BASE"] {
-        if let Ok(v) = std::env::var(key) {
-            for part in v.replace(';', ",").split(',') {
-                let s = part.trim().trim_end_matches('/').to_string();
-                if !s.is_empty() {
-                    list.push(s);
-                }
-            }
-        }
-    }
+    split_into(&mut list, DEFAULT_API_BASES);
 
-    for base in DEFAULT_API_BASES {
-        list.push(base.to_string());
-    }
-
-    let mut seen = std::collections::HashSet::new();
-    list.retain(|s| seen.insert(s.to_lowercase()));
-    list
+    dedup(list)
 }
 
 async fn probe(client: &Client, base: &str) -> Option<Duration> {

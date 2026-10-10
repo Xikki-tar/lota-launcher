@@ -7,7 +7,11 @@ import platform
 import socket
 import ssl
 import tempfile
+import itertools
 import threading
+import re
+import time
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -54,6 +58,9 @@ from auth.auth_storage import (
 )
 from auth.api_base import get_api_base
 from services.library_service import LibraryService
+from window.i18n import set_language
+
+set_language()
 
 app = Flask(__name__)
 app.config["JSON_SORT_KEYS"] = False
@@ -85,22 +92,62 @@ def _log_action():
         return
     print(f"[action] {request.method} {path}", flush=True)
 
-_log_lines: list[str] = []
-_log_lock = threading.Lock()
 _LOG_MAX = 2000
-
-try:
-    _log_file = (get_data_dir() / "launcher.log").open("a", encoding="utf-8")
-except Exception:
-    _log_file = None
+_log_lines: deque[str] = deque(maxlen=_LOG_MAX)
+_log_total = 0
+_log_lock = threading.Lock()
 
 
-def _log_append(line: str) -> None:
+_LOGS_KEEP = 5
+
+
+def _prune_files(directory: Path, pattern: str, keep: int = _LOGS_KEEP) -> None:
+    try:
+        files = [p for p in directory.glob(pattern) if p.is_file()]
+    except OSError:
+        return
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    for old in files[keep:]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+
+
+def _prune_launcher_logs() -> None:
+    logs_dir = get_data_dir() / "logs"
+    for pattern in ("minecraft_*.log", "launch_failed_*.log", "launcher_*.log"):
+        _prune_files(logs_dir, pattern)
+
+
+def _prune_game_logs(game_dir: Path) -> None:
+    _prune_files(game_dir / "logs", "*.log.gz")
+    _prune_files(game_dir / "crash-reports", "crash-*.txt")
+
+
+def _open_launcher_log():
+    path = get_data_dir() / "launcher.log"
+    try:
+        if path.exists():
+            path.replace(path.with_name("launcher.log.1"))
+    except OSError:
+        pass
+    try:
+        return path.open("a", encoding="utf-8")
+    except Exception:
+        return None
+
+
+_log_file = _open_launcher_log()
+_prune_launcher_logs()
+
+
+def _log_append(line: str, persist: bool = True) -> None:
+    global _log_total
     with _log_lock:
         _log_lines.append(line)
-        if len(_log_lines) > _LOG_MAX:
-            del _log_lines[:len(_log_lines) - _LOG_MAX]
-        if _log_file is not None:
+        _log_total += 1
+        if persist and _log_file is not None:
             try:
                 _log_file.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {line}\n")
                 _log_file.flush()
@@ -141,11 +188,41 @@ sys.stderr = _LogWriter(sys.__stderr__, "[ERR] ")
 import logging as _logging
 
 class _WerkzeugFilter(_logging.Filter):
-    _SKIP = ("/debug/logs", "/play/state", "/skin/head")
+    _SKIP = ("/debug/logs", "/play/state", "/skin/head", "/task/", "/tasks/active_downloads")
     def filter(self, record: _logging.LogRecord) -> bool:
         msg = record.getMessage()
         return not any(s in msg for s in self._SKIP)
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+class _ConsoleLogHandler(_logging.Handler):
+    def emit(self, record: _logging.LogRecord) -> None:
+        try:
+            text = _ANSI_RE.sub("", self.format(record))
+        except Exception:
+            return
+        if record.levelno >= _logging.ERROR:
+            prefix, stream = "[ERR] ", sys.__stderr__
+        elif record.levelno >= _logging.WARNING:
+            prefix, stream = "[WARN] ", sys.__stderr__
+        else:
+            prefix, stream = "", sys.__stdout__
+        if stream:
+            try:
+                stream.write(text + "\n")
+                stream.flush()
+            except Exception:
+                pass
+        for line in text.splitlines():
+            if line.strip():
+                _log_append(f"{prefix}{line}")
+
+
+_root_logger = _logging.getLogger()
+_root_logger.handlers[:] = [_ConsoleLogHandler()]
+_root_logger.setLevel(_logging.INFO)
+_logging.captureWarnings(True)
 _logging.getLogger("werkzeug").addFilter(_WerkzeugFilter())
 
 
@@ -169,10 +246,38 @@ def _task_done(task_id: str, error: str | None = None, result: dict | None = Non
             _tasks[task_id]["result"] = result
 
 
-def _task_progress(task_id: str, progress: int):
+def _task_progress(task_id: str, progress: int | None = None, file: str | None = None, speed: float | None = None):
     with _tasks_lock:
         if task_id in _tasks:
-            _tasks[task_id]["progress"] = progress
+            if progress is not None:
+                _tasks[task_id]["progress"] = progress
+            if file is not None:
+                _tasks[task_id]["file"] = file
+            if speed is not None:
+                _tasks[task_id]["speed"] = speed
+
+
+class _SpeedMeter:
+    def __init__(self, window: float = 2.0):
+        self._lock = threading.Lock()
+        self._samples: deque[tuple[float, int]] = deque()
+        self._window = window
+
+    def _trim(self, now: float) -> None:
+        while self._samples and now - self._samples[0][0] > self._window:
+            self._samples.popleft()
+
+    def add(self, size: int) -> None:
+        now = time.monotonic()
+        with self._lock:
+            self._samples.append((now, size))
+            self._trim(now)
+
+    def speed(self) -> float:
+        now = time.monotonic()
+        with self._lock:
+            self._trim(now)
+            return sum(size for _, size in self._samples) / self._window
 
 
 def _lib() -> LibraryService:
@@ -293,7 +398,8 @@ def _check_launcher_update_github(local_version: str) -> dict | None:
 
 @app.get("/update/check")
 def update_check():
-    mode = _update_mode()
+    from auth.settings import UPDATES_DISABLED
+    mode = None if UPDATES_DISABLED else _update_mode()
     if mode not in ("appimage", "macos-app"):
         return jsonify({"ok": True, "mode": mode, "update_available": False})
     local_version = str(request.args.get("version") or "0.0.0")
@@ -365,6 +471,8 @@ def update_install():
 
             digest = hashlib.sha256()
             downloaded = 0
+            meter = _SpeedMeter()
+            file_name = Path(url.split("?", 1)[0]).name or "update"
             with http.get(url, stream=True, timeout=120) as resp:
                 if resp.status_code != 200:
                     raise RuntimeError(f"HTTP {resp.status_code}")
@@ -376,8 +484,14 @@ def update_install():
                         f.write(chunk)
                         digest.update(chunk)
                         downloaded += len(chunk)
-                        if total > 0:
-                            _task_progress(task_id, min(95, int(downloaded * 95 / total)))
+                        meter.add(len(chunk))
+                        _task_progress(
+                            task_id,
+                            min(95, int(downloaded * 95 / total)) if total > 0 else None,
+                            file=file_name,
+                            speed=meter.speed(),
+                        )
+            _task_progress(task_id, speed=0)
 
             if size and downloaded != size:
                 raise RuntimeError(f"size mismatch: expected {size}, got {downloaded}")
@@ -446,6 +560,7 @@ def settings_save():
     settings = load_settings()
     settings.update(body)
     save_settings(settings)
+    set_language(str(settings.get("language") or ""))
     return jsonify({"ok": True})
 
 
@@ -456,6 +571,17 @@ def i18n():
     lang = str(settings.get("language") or "Русский")
     trans = TRANSLATIONS.get(lang) or TRANSLATIONS.get("Русский") or {}
     return jsonify({"language": lang, "strings": trans})
+
+
+@app.get("/java/version")
+def java_version():
+    import shutil
+    from auth.java_finder import get_java_major_version, is_executable
+    path = str(request.args.get("path") or "").strip()
+    resolved = path if path and is_executable(path) else (shutil.which(path) if path else None)
+    if not resolved:
+        return jsonify({"path": path, "major": None, "found": False})
+    return jsonify({"path": path, "major": get_java_major_version(resolved), "found": True})
 
 
 @app.get("/java/scan")
@@ -501,8 +627,12 @@ def _proxy_get(path: str, params: dict) -> tuple[dict, int]:
 def debug_logs():
     since = int(request.args.get("since", 0))
     with _log_lock:
-        total = len(_log_lines)
-        lines = _log_lines[since:] if since < total else []
+        total = _log_total
+        first = total - len(_log_lines)
+        if since > total:
+            since = 0
+        start = max(since, first)
+        lines = list(itertools.islice(_log_lines, start - first, None)) if start < total else []
     return jsonify({"lines": lines, "total": total})
 
 
@@ -642,32 +772,20 @@ def library_download():
 
     def run():
         try:
-            base_url = get_api_base()
-            build_id = int((source_item or item).get("id"))
-            archive_path = lib.build_archive_path(item)
-            archive_path.parent.mkdir(parents=True, exist_ok=True)
+            meter = _SpeedMeter()
 
-            with http.post(
-                f"{base_url}/api/build/download",
-                json={"token": token, "build_id": build_id},
-                stream=True, timeout=120,
-            ) as resp:
-                if resp.status_code != 200:
-                    _task_done(task_id, f"HTTP {resp.status_code}")
-                    return
-                total = int(resp.headers.get("Content-Length") or 0)
-                downloaded = 0
-                with archive_path.open("wb") as f:
-                    for chunk in resp.iter_content(chunk_size=1024 * 256):
-                        if not chunk:
-                            continue
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if total > 0:
-                            _task_progress(task_id, min(90, int(downloaded * 90 / total)))
+            def on_progress(name: str, delta: int, done: int, total: int):
+                if delta > 0:
+                    meter.add(delta)
+                _task_progress(
+                    task_id,
+                    min(99, int(done * 99 / total)) if total > 0 else None,
+                    file=name or None,
+                    speed=meter.speed(),
+                )
 
-            lib.install_or_update_build(item, archive_path, source_item=source_item)
-            _task_progress(task_id, 100)
+            lib.sync_build(item, token=token, source_item=source_item, progress=on_progress)
+            _task_progress(task_id, 100, speed=0)
             _task_done(task_id)
             print(f"[library] download done: build_key={build_key}", flush=True)
         except Exception as exc:
@@ -782,8 +900,159 @@ def tasks_active_downloads():
     return jsonify({"active": count > 0, "count": count})
 
 
+class _LaunchReport:
+    def __init__(self):
+        self.lines: list[str] = []
+        self.started = time.monotonic()
+        self.last = self.started
+        self.hidden: list[str] = []
+
+    def hide(self, path) -> None:
+        for value in {str(path), os.path.realpath(str(path))}:
+            if value and value not in self.hidden:
+                self.hidden.append(value)
+        self.hidden.sort(key=len, reverse=True)
+
+    def add(self, text: str, console: bool = True) -> None:
+        for value in self.hidden:
+            text = text.replace(value, "<hidden>")
+        line = f"[launch] {text}"
+        self.lines.append(line)
+        if console:
+            print(line, flush=True)
+
+    def section(self, title: str) -> None:
+        self.add(f"=== {title} ===")
+
+    def step(self, name: str) -> None:
+        now = time.monotonic()
+        self.add(f"{name}: {now - self.last:.2f}s (total {now - self.started:.2f}s)")
+        self.last = now
+
+    def write_to(self, path: Path) -> None:
+        try:
+            with path.open("w", encoding="utf-8") as out:
+                out.write("\n".join(self.lines) + "\n\n")
+        except OSError:
+            pass
+
+
+_SECRET_ARGS = ("--accessToken", "--clientId", "--xuid")
+
+
+def _report_environment(report: _LaunchReport, settings: dict) -> None:
+    import platform as _platform
+    report.section("environment")
+    report.add(f"time: {datetime.now().isoformat(timespec='seconds')}")
+    report.add(f"os: {_platform.platform()} ({_platform.machine()})")
+    report.add(f"python: {sys.version.split()[0]}, frozen: {bool(getattr(sys, 'frozen', False))}")
+    report.add(f"data dir: {get_data_dir()}")
+    try:
+        report.add(f"api base: {get_api_base()}")
+    except Exception as exc:
+        report.add(f"api base: unresolved ({type(exc).__name__}: {exc})")
+    report.section("settings")
+    for key in ("auto_java_version", "java_path", "mem_min_mb", "mem_max_mb", "jvm_args", "disable_openal", "language", "selected_build"):
+        report.add(f"{key}: {settings.get(key)!r}")
+
+
+def _report_java(report: _LaunchReport, java_path: str, mode: str) -> None:
+    from auth.java_finder import get_java_major_version, get_java_version
+    import shutil as _shutil
+    resolved = java_path if os.path.isfile(java_path) else (_shutil.which(java_path) or java_path)
+    report.section("java")
+    report.add(f"mode: {mode}")
+    report.add(f"path: {java_path}")
+    if resolved != java_path:
+        report.add(f"resolved: {resolved}")
+    report.add(f"version: {get_java_version(resolved)}")
+    report.add(f"major: {get_java_major_version(resolved)}")
+
+
+def _report_build(report: _LaunchReport, build_key: str, game_dir: Path) -> None:
+    from services.build_sync import CLOSED_DIR, load_state
+    report.section("build")
+    report.add(f"build key: {build_key}")
+    report.add(f"game dir: {game_dir}")
+    state = load_state(game_dir)
+    units = state.get("units") or {}
+    closed = [p for p, e in units.items() if isinstance(e, dict) and e.get("closed")]
+    report.add(f"build id: {state.get('build_id')}, units: {len(units)}, closed: {len(closed)}")
+    for path in closed:
+        payload = game_dir / CLOSED_DIR / str(units[path].get("payload") or "")
+        size = payload.stat().st_size if payload.is_file() else None
+        report.add(f"closed unit: {path} -> {payload.name} ({size if size is not None else 'MISSING'} bytes)")
+    mods_dir = game_dir / "mods"
+    mods = sorted(p.name for p in mods_dir.glob("*.jar")) if mods_dir.is_dir() else []
+    disabled = sorted(p.name for p in mods_dir.glob("*.disabled")) if mods_dir.is_dir() else []
+    report.add(f"mods: {len(mods)} enabled, {len(disabled)} disabled")
+    for name in mods:
+        report.add(f"  mod: {name}", console=False)
+    for name in disabled:
+        report.add(f"  disabled: {name}", console=False)
+
+
+def _report_bundle(report: _LaunchReport, bundle_state) -> None:
+    report.section("protected content")
+    if bundle_state is None:
+        report.add("none")
+        return
+    report.hide(bundle_state.temp_dir)
+    for link in bundle_state.links:
+        report.add(f"linked: {link}")
+    for original, hidden in bundle_state.hidden:
+        report.add(f"hidden during game: {original} -> {hidden.name}")
+    report.add(f"overlay files: {len(bundle_state.written)}, backups: {len(bundle_state.backups)}, disabled mods: {len(bundle_state.disabled)}")
+    for original, renamed in bundle_state.disabled:
+        report.add(f"  disabled duplicate: {original.name}", console=False)
+    for arg in bundle_state.game_args:
+        report.add(f"game arg: {arg}")
+
+
+def _report_version(report: _LaunchReport, prepared) -> None:
+    data = prepared.version_json
+    report.section("minecraft")
+    report.add(f"version: {prepared.version_id} (inherits {data.get('inheritsFrom') or '-'})")
+    report.add(f"main class: {data.get('mainClass')}")
+    report.add(f"asset index: {(data.get('assetIndex') or {}).get('id')}")
+    report.add(f"libraries: {len(data.get('libraries') or [])}")
+    report.add(f"versions dir: {prepared.versions_dir}")
+    report.add(f"libraries dir: {prepared.libraries_dir}")
+    report.add(f"assets dir: {prepared.assets_dir}")
+    report.add(f"natives dir: {prepared.natives_dir}")
+
+
+def _report_command(report: _LaunchReport, argv: list[str], cwd) -> None:
+    report.section("command")
+    report.add(f"cwd: {cwd}")
+    report.add(f"executable: {argv[0] if argv else '-'}")
+    hide_next = False
+    cp_next = False
+    for index, arg in enumerate(argv[1:], start=1):
+        if hide_next:
+            report.add(f"arg[{index}]: ***")
+            hide_next = False
+            continue
+        if cp_next:
+            entries = [e for e in arg.split(os.pathsep) if e]
+            missing = [e for e in entries if not os.path.exists(e)]
+            report.add(f"arg[{index}]: <classpath: {len(entries)} entries, {len(missing)} missing>")
+            for entry in entries:
+                report.add(f"  cp: {entry}", console=False)
+            for entry in missing:
+                report.add(f"  cp MISSING: {entry}")
+            cp_next = False
+            continue
+        report.add(f"arg[{index}]: {arg}")
+        if arg in _SECRET_ARGS:
+            hide_next = True
+        elif arg in ("-cp", "-classpath", "--class-path"):
+            cp_next = True
+
+
 _play_state: dict = {"state": "idle", "status": "", "error": None}
 _play_lock = threading.Lock()
+_play_meter: _SpeedMeter | None = None
 
 _MOD_FAILURE_MARKERS = (
     "---- Minecraft Crash Report ----",
@@ -814,8 +1083,11 @@ def _friendly_play_error(exc: Exception) -> str:
 
 @app.get("/play/state")
 def play_state():
+    meter = _play_meter
     with _play_lock:
-        return jsonify({k: v for k, v in _play_state.items() if k != "_proc"})
+        data = {k: v for k, v in _play_state.items() if k != "_proc"}
+    data["speed"] = meter.speed() if meter else 0
+    return jsonify(data)
 
 
 @app.post("/play/start")
@@ -825,8 +1097,16 @@ def play_start():
             return jsonify({"ok": False, "error": "already_running"})
 
     def run():
+        global _play_meter
         from services.play_service import PlayService
+        from minecraft.mc_client import set_download_listener
         service = PlayService()
+        meter = _SpeedMeter()
+
+        def on_download_bytes(name: str, size: int):
+            meter.add(size)
+            with _play_lock:
+                _play_state["file"] = name
 
         def set_status(msg):
             with _play_lock:
@@ -841,10 +1121,14 @@ def play_start():
                 _play_state["progress"] = max(0, min(100, p))
 
         with _play_lock:
-            _play_state.update({"state": "running", "status": "Подготовка...", "error": None, "progress": 0})
+            _play_state.update({"state": "running", "status": "Подготовка...", "error": None, "progress": 0, "file": None})
+        _play_meter = meter
+        set_download_listener(on_download_bytes)
 
+        report = _LaunchReport()
         try:
             settings = load_settings()
+            _report_environment(report, settings)
             allow_update = True
             build_key = service.ensure_latest_build_selected(
                 status=set_status, progress=set_progress, allow_build_update=allow_update
@@ -855,36 +1139,51 @@ def play_start():
                 print("[play] no builds available", flush=True)
                 return
             print(f"[play] build selected: {build_key}", flush=True)
+            report.step("build check")
 
-            java_path = service.ensure_oracle_java_21(status=set_status, progress=set_progress)
-            if not java_path:
-                java_path = str(settings.get("java_path") or "")
+            from services.play_service import resolve_custom_java, system_openal_jvm_args
+            custom_java = str(settings.get("java_path") or "").strip()
+            if settings.get("auto_java_version", True) or not custom_java:
+                java_mode = "auto (launcher Oracle JDK 21)" if settings.get("auto_java_version", True) else "auto (no custom path set)"
+                java_path = service.ensure_oracle_java_21(status=set_status, progress=set_progress)
+            else:
+                java_mode = "custom"
+                java_path = resolve_custom_java(custom_java)
             print(f"[play] java_path: {java_path}", flush=True)
+            _report_java(report, java_path, java_mode)
+            report.step("java ready")
 
             set_status("Запуск...")
 
             from minecraft.mc_client import ensure_forge_version, prepare_version
             from minecraft.mc_launch import build_launch_spec
-            from auth.auth_storage import get_data_dir
             import platform
 
             game_dir = (get_data_dir() / "library" / build_key)
             if not game_dir.is_dir():
                 game_dir = get_data_dir() / "minecraft"
 
+            _report_build(report, build_key, game_dir)
             bundle_state = service.prepare_bundle_files(game_dir)
+            _report_bundle(report, bundle_state)
+            report.step("protected content ready")
             try:
                 shared_game_dir = get_data_dir() / "minecraft"
                 versions_dir = shared_game_dir / "versions"
                 version_id = ensure_forge_version(versions_dir, java_path, shared_game_dir, status=set_status)
+                report.step("forge ready")
                 prepared = prepare_version(version_id, progress=set_progress, status=set_status)
+                _report_version(report, prepared)
+                report.step("libraries and assets ready")
 
                 auth = load_auth_data() or {}
                 username = str(settings.get("offline_username") or auth.get("username") or "Player")
 
-                mem_min = int(settings.get("mem_min_mb") or 1024)
                 mem_max = int(settings.get("mem_max_mb") or 4096)
+                mem_min = min(int(settings.get("mem_min_mb") or 1024), mem_max)
                 jvm_args = str(settings.get("jvm_args") or "")
+                if settings.get("disable_openal"):
+                    jvm_args = system_openal_jvm_args(jvm_args)
 
                 spec = build_launch_spec(
                     prepared=prepared,
@@ -896,26 +1195,39 @@ def play_start():
                     game_dir_override=game_dir,
                 )
 
+                argv = spec.argv + (bundle_state.game_args if bundle_state else [])
+                report.section("launch")
+                report.add(f"player: {username}")
+                report.add(f"memory: -Xms{mem_min}M -Xmx{mem_max}M")
+                report.add(f"user jvm args: {settings.get('jvm_args') or '-'}")
+                report.add(f"effective jvm args: {jvm_args or '-'}")
+                _report_command(report, argv, spec.cwd)
+
                 import subprocess
                 proc = subprocess.Popen(
-                    spec.argv, cwd=spec.cwd,
+                    argv, cwd=spec.cwd,
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, encoding="utf-8", errors="replace",
                 )
                 print(f"[play] process launched, pid={proc.pid}", flush=True)
+                report.add(f"pid: {proc.pid}")
+                report.step("process started")
                 with _play_lock:
                     _play_state.update({"state": "launched", "status": "Игра запущена", "pid": proc.pid, "_proc": proc, "mod_error": None})
 
                 log_path = get_data_dir() / "logs" / f"minecraft_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
                 log_path.parent.mkdir(parents=True, exist_ok=True)
+                report.add(f"minecraft log: {log_path}")
+                report.write_to(log_path)
+                _prune_launcher_logs()
+                _prune_game_logs(game_dir)
 
                 def _pipe_mc_logs():
-                    with log_path.open("w", encoding="utf-8") as log_file:
+                    with log_path.open("a", encoding="utf-8") as log_file:
                         for line in proc.stdout:
                             clean = line.rstrip()
-                            _log_append("[MC] " + clean)
+                            _log_append("[MC] " + clean, persist=False)
                             log_file.write(clean + "\n")
-                            log_file.flush()
                             if any(marker in clean for marker in _MOD_FAILURE_MARKERS):
                                 with _play_lock:
                                     if not _play_state.get("mod_error"):
@@ -926,6 +1238,7 @@ def play_start():
 
                 proc.wait()
                 log_thread.join(timeout=5)
+                print(f"[launch] game ran for {time.monotonic() - report.last:.0f}s, exit code {proc.returncode}", flush=True)
             finally:
                 service.cleanup_bundle_files(bundle_state)
 
@@ -947,8 +1260,22 @@ def play_start():
 
         except Exception as exc:
             print(f"[play] launch failed: {type(exc).__name__}: {exc}", flush=True)
+            report.add(f"FAILED after {time.monotonic() - report.started:.2f}s: {type(exc).__name__}: {exc}")
+            import traceback
+            for line in traceback.format_exc().splitlines():
+                report.add(line, console=False)
+            failed_log = get_data_dir() / "logs" / f"launch_failed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+            failed_log.parent.mkdir(parents=True, exist_ok=True)
+            report.write_to(failed_log)
+            _prune_launcher_logs()
+            print(f"[launch] report saved: {failed_log}", flush=True)
             with _play_lock:
                 _play_state.update({"state": "error", "error": _friendly_play_error(exc)})
+        finally:
+            set_download_listener(None)
+            _play_meter = None
+            with _play_lock:
+                _play_state["file"] = None
 
     threading.Thread(target=run, daemon=True).start()
     return jsonify({"ok": True})
@@ -1339,6 +1666,9 @@ def skin_model():
     return Response(buf.getvalue(), content_type="image/png", headers={"Cache-Control": "no-store"})
 
 
+_SKIN_MAX_BYTES = 16 * 1024
+
+
 @app.post("/account/skin/upload")
 def account_skin_upload():
     file = request.files.get("file")
@@ -1351,6 +1681,8 @@ def account_skin_upload():
     data = file.read()
     if not data:
         return jsonify({"ok": False, "error": "no_file"}), 400
+    if len(data) > _SKIN_MAX_BYTES:
+        return jsonify({"ok": False, "error": "skin_too_large"})
     if not data.startswith(b"\x89PNG"):
         return jsonify({"ok": False, "error": "skin_bad_format"})
 
@@ -1381,9 +1713,14 @@ def account_skin_upload():
             timeout=15,
         )
         resp = r.json() if r.headers.get("Content-Type", "").startswith("application/json") else {}
-        return jsonify({"ok": r.status_code == 200, "status_code": r.status_code, "data": resp, "saved": True})
     except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc), "saved": True})
+        print(f"[account] skin upload failed: {type(exc).__name__}: {exc}", flush=True)
+        return jsonify({"ok": False, "error": "conn_refused", "saved": True})
+    if r.status_code != 200 or not isinstance(resp, dict) or resp.get("ok") is not True:
+        error = (resp.get("error") if isinstance(resp, dict) else None) or f"http_{r.status_code}"
+        print(f"[account] skin upload rejected: HTTP {r.status_code}: {str(resp)[:300]}", flush=True)
+        return jsonify({"ok": False, "error": error, "status_code": r.status_code, "saved": True})
+    return jsonify({"ok": True, "status_code": r.status_code, "data": resp, "saved": True})
 
 
 @app.post("/account/discord/link")
@@ -1394,9 +1731,16 @@ def account_discord_link():
         return jsonify({"ok": False, "error": "no_token"})
     try:
         base = get_api_base()
-        r = http.post(f"{base}/api/account/discord-link", json={"token": token}, timeout=5)
-        return jsonify({"ok": r.status_code == 200, "status_code": r.status_code, "data": r.json()})
-    except Exception:
+        r = http.post(f"{base}/api/account/discord-link", json={"token": token}, timeout=15)
+        try:
+            data = r.json()
+        except ValueError:
+            data = {"error": "bad_response"}
+        if r.status_code not in (200, 409):
+            print(f"[account] discord link failed: HTTP {r.status_code}: {str(data)[:300]}", flush=True)
+        return jsonify({"ok": r.status_code == 200, "status_code": r.status_code, "data": data})
+    except Exception as exc:
+        print(f"[account] discord link failed: {type(exc).__name__}: {exc}", flush=True)
         return jsonify({"ok": False, "error": "conn_refused"})
 
 

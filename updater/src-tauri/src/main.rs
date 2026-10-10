@@ -11,7 +11,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter};
 
-const API_BASES: [&str; 2] = ["https://ru.lota.work", "https://eu.lota.work"];
+const API_BASES: &str = match option_env!("LOTA_BUILD_API_BASES") {
+    Some(v) => v,
+    None => "https://ru.lota.work,https://eu.lota.work",
+};
 const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
 const SKIP_UPDATER_ARG: &str = "--skip-updater";
@@ -99,7 +102,7 @@ async fn fetch_runtime_manifest() -> Option<(String, RuntimeCheckResponse)> {
     let client = reqwest::Client::builder().timeout(CHECK_TIMEOUT).build().ok()?;
     let payload = serde_json::json!({ "platform": PLATFORM, "channel": CHANNEL });
 
-    for base in API_BASES {
+    for base in API_BASES.split(',').map(str::trim).filter(|b| !b.is_empty()) {
         let url = format!("{base}/api/runtime/check");
         let Ok(resp) = client.post(&url).json(&payload).send().await else {
             continue;
@@ -195,6 +198,10 @@ async fn launch_launcher_and_exit(app: &AppHandle, dir: &Path) {
 
 async fn run_update_flow(app: AppHandle) {
     let dir = exe_dir();
+    if option_env!("LOTA_BUILD_DISABLE_UPDATES").is_some() {
+        launch_launcher_and_exit(&app, &dir).await;
+        return;
+    }
     let local_version = read_local_version(&dir);
     emit_status(&app, "Проверяю обновления...");
 

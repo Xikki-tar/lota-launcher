@@ -8,6 +8,7 @@ import { type Localized, langCode, loc } from "../lib/localized";
 import { trackTask, isTracking, useProgress } from "../lib/progressStore";
 import type { PageContext } from "../components/Layout";
 import LoadingDots from "../components/LoadingDots";
+import DownloadProgress from "../components/DownloadProgress";
 import styles from "./Library.module.css";
 
 interface Build {
@@ -23,7 +24,7 @@ interface Build {
   _build_key: string;
 }
 
-interface TaskStatus { progress?: number; state?: string; error?: string | null; }
+interface TaskStatus { progress?: number; state?: string; error?: string | null; file?: string | null; speed?: number; }
 
 interface OverlayState {
   mode: "create" | "edit";
@@ -382,14 +383,7 @@ export default function Library() {
                 )}
               </div>
 
-              {isDl && (
-                <div className={styles.dlProgress}>
-                  <div className={styles.dlBar}>
-                    <div className={styles.dlFill} style={{ width: `${dlPct}%` }} />
-                  </div>
-                  <span className={styles.dlText}>{dlPct}%</span>
-                </div>
-              )}
+              {isDl && <DownloadProgress id={activeBuild._build_key} />}
 
               <div className={styles.infoActions}>
                 {(!activeBuild._installed || !activeBuild._up_to_date) && (

@@ -27,7 +27,20 @@ def _split_candidates(raw: str) -> list[str]:
     return items
 
 
+def _env_candidates() -> list[str]:
+    candidates: list[str] = []
+    for key in ("LOTA_API_BASES", "LOTA_API_BASE"):
+        raw = os.getenv(key, "").strip()
+        if raw:
+            candidates.extend(_split_candidates(raw))
+    return candidates
+
+
 def get_api_candidates() -> list[str]:
+    env_candidates = _env_candidates()
+    if env_candidates:
+        return list(dict.fromkeys(env_candidates))
+
     settings = load_settings()
     candidates: list[str] = []
 
@@ -38,13 +51,6 @@ def get_api_candidates() -> list[str]:
             candidates.extend(_split_candidates(multi))
         if single:
             candidates.extend(_split_candidates(single))
-
-    env_multi = os.getenv("LOTA_API_BASES", "").strip()
-    env_single = os.getenv("LOTA_API_BASE", "").strip()
-    if env_multi:
-        candidates.extend(_split_candidates(env_multi))
-    if env_single:
-        candidates.extend(_split_candidates(env_single))
 
     if API_BASE:
         candidates.extend(_split_candidates(API_BASE))

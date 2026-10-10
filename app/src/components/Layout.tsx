@@ -3,7 +3,9 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useBackend, apiGet, apiPost, invalidateCache } from "../lib/BackendContext";
 import { useI18n } from "../lib/I18nContext";
 import { win } from "../lib/tauri";
-import { startFakeProgress, applyRealProgress, stopTracking, useProgress } from "../lib/progressStore";
+import { startProgress, applyProgress, stopTracking, setProgressMeta, useProgress } from "../lib/progressStore";
+import DownloadProgress from "./DownloadProgress";
+import { isAppHidden, setAppHidden } from "../lib/appVisibility";
 import styles from "./Layout.module.css";
 
 const PLAY_PROGRESS_ID = "play-start";
@@ -21,6 +23,8 @@ export interface PlayState {
   progress?: number;
   error?: string | null;
   pid?: number | null;
+  file?: string | null;
+  speed?: number;
 }
 
 export interface PageContext {
@@ -55,7 +59,7 @@ function DebugConsole({ port }: { port: number | null }) {
 
   useEffect(() => {
     async function poll() {
-      if (!port) return;
+      if (!port || isAppHidden()) return;
       try {
         const res = await fetch(
           `http://127.0.0.1:${port}/debug/logs?since=${offsetRef.current}`
@@ -89,8 +93,9 @@ function DebugConsole({ port }: { port: number | null }) {
       <div className={styles.debugBody}>
         {lines.map((l, i) => (
           <div key={i} className={`${styles.debugLine} ${
-            l.startsWith("[ERR]") ? styles.debugLineErr :
-            l.startsWith("[MC]")  ? styles.debugLineMc  : ""
+            l.startsWith("[ERR]")  ? styles.debugLineErr  :
+            l.startsWith("[WARN]") ? styles.debugLineWarn :
+            l.startsWith("[MC]")   ? styles.debugLineMc   : ""
           }`}>{l}</div>
         ))}
         <div ref={bottomRef} />
@@ -108,6 +113,8 @@ export default function Layout({ onLogout }: LayoutProps) {
   const [playState, setPlayState] = useState<PlayState>({ state: "idle" });
   const [playBusy, setPlayBusy] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const profileRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const prevPlayStateRef = useRef<string>("idle");
 
@@ -146,6 +153,13 @@ export default function Layout({ onLogout }: LayoutProps) {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [port]);
 
+  const preparing = (playState.state ?? "idle") === "running";
+  useEffect(() => {
+    if (!preparing) return;
+    const id = setInterval(pollPlayState, 1000);
+    return () => clearInterval(id);
+  }, [preparing, port]);
+
   async function loadDebugMode() {
     try {
       const s = await apiGet<{ debug_mode?: boolean }>(port, "/settings", 0);
@@ -167,17 +181,20 @@ export default function Layout({ onLogout }: LayoutProps) {
 
       const newState = data.state ?? "idle";
       if (newState === "running") {
-        if (typeof data.progress === "number" && data.progress > 0) {
-          applyRealProgress(PLAY_PROGRESS_ID, data.progress);
+        if (typeof data.progress === "number") {
+          applyProgress(PLAY_PROGRESS_ID, data.progress);
         }
+        setProgressMeta(PLAY_PROGRESS_ID, { file: data.file ?? null, speed: data.speed ?? 0 });
       } else {
         stopTracking(PLAY_PROGRESS_ID);
       }
 
       const prevState = prevPlayStateRef.current;
       if (newState === "launched" && prevState !== "launched") {
-        win.hide().catch(() => {});
+        setAppHidden(true);
+        win.hideUntilGameExit().catch(() => {});
       } else if (prevState === "launched" && newState !== "launched") {
+        setAppHidden(false);
         win.show().catch(() => {});
       }
       prevPlayStateRef.current = newState;
@@ -196,7 +213,7 @@ export default function Layout({ onLogout }: LayoutProps) {
       if (ps === "launched") {
         await apiPost(port, "/play/stop");
       } else {
-        startFakeProgress(PLAY_PROGRESS_ID);
+        startProgress(PLAY_PROGRESS_ID);
         await apiPost(port, "/play/start");
       }
       await pollPlayState();
@@ -205,7 +222,24 @@ export default function Layout({ onLogout }: LayoutProps) {
     }
   }
 
+  useEffect(() => {
+    if (!profileMenuOpen) return;
+    function onPointerDown(e: MouseEvent) {
+      if (profileRef.current && !profileRef.current.contains(e.target as Node)) setProfileMenuOpen(false);
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setProfileMenuOpen(false);
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [profileMenuOpen]);
+
   async function handleLogout() {
+    setProfileMenuOpen(false);
     await apiPost(port, "/auth/clear").catch(() => {});
     invalidateCache();
     onLogout();
@@ -274,11 +308,7 @@ export default function Layout({ onLogout }: LayoutProps) {
             {(isPreparing || isLaunched || isError) && (
               <div className={`${styles.playStatus} ${isError ? styles.playError : ""}`}>
                 {statusText}
-                {isPreparing && progress > 0 && (
-                  <div className={styles.progressBar}>
-                    <div className={styles.progressFill} style={{ width: `${progress}%` }} />
-                  </div>
-                )}
+                {isPreparing && progress > 0 && <DownloadProgress id={PLAY_PROGRESS_ID} />}
               </div>
             )}
 
@@ -296,13 +326,24 @@ export default function Layout({ onLogout }: LayoutProps) {
 
             <div className={styles.spacer} />
 
-            <div
-              className={styles.profileCard}
-              onClick={() => navigateAnimated("/account")}
-              title="Аккаунт"
-            >
-              <SkinHead port={port} username={username} />
-              <div className={styles.profileName}>{username}</div>
+            <div className={styles.profileWrap} ref={profileRef}>
+              {profileMenuOpen && (
+                <div className={styles.profileMenu}>
+                  <button className={`${styles.profileMenuItem} ${styles.profileMenuDanger}`} onClick={handleLogout}>
+                    {t("profile_logout", "Выйти из аккаунта")}
+                  </button>
+                  <button className={styles.profileMenuItem} onClick={() => setProfileMenuOpen(false)}>
+                    {t("profile_add_account", "Добавить аккаунт")}
+                  </button>
+                </div>
+              )}
+              <div
+                className={`${styles.profileCard} ${profileMenuOpen ? styles.profileCardActive : ""}`}
+                onClick={() => setProfileMenuOpen(open => !open)}
+              >
+                <SkinHead port={port} username={username} />
+                <div className={styles.profileName}>{username}</div>
+              </div>
             </div>
 
             <button className={styles.btnExit} onClick={() => win.close()}>

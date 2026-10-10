@@ -5,6 +5,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PORT_FILE="$SCRIPT_DIR/.dev-port"
 
+export LOTA_API_BASE="${LOTA_API_BASE:-https://test.lota.work}"
+
 # Активируем venv если есть
 if [ -f "$SCRIPT_DIR/.venv/bin/activate" ]; then
   source "$SCRIPT_DIR/.venv/bin/activate"

@@ -1,6 +1,16 @@
 import os
 
-DEFAULT_API_BASES = "https://ru.lota.work,https://eu.lota.work"
+try:
+    from auth.build_api import API_BASES as _BUILD_API_BASES
+except ImportError:
+    _BUILD_API_BASES = ""
+
+try:
+    from auth.build_api import UPDATES_DISABLED
+except ImportError:
+    UPDATES_DISABLED = False
+
+DEFAULT_API_BASES = _BUILD_API_BASES or "https://ru.lota.work,https://eu.lota.work"
 
 API_BASE = (
     os.getenv("LOTA_API_BASES", "").strip()

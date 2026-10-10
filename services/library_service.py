@@ -4,13 +4,13 @@ import json
 import random
 import re
 import shutil
-import tempfile
 import time
-import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
 import requests
+
+from services.build_sync import BuildSync, ProgressCallback, remove_closed_links
 
 
 @dataclass(frozen=True)
@@ -51,26 +51,6 @@ class LibraryPaths:
 
 class LibraryService:
     BUILD_META_FILE_NAME = ".lota_build_meta.json"
-    WINDOWS_SYSTEM_FILES = {"desktop.ini", "thumbs.db", ".ds_store"}
-    PROTECTED_TOP_LEVEL_DIRS = {
-        "saves",
-        "config",
-        "logs",
-        "crash-reports",
-        "screenshots",
-        "journeymap",
-        "backups",
-    }
-    PROTECTED_TOP_LEVEL_FILES = {
-        "options.txt",
-        "optionsof.txt",
-        "servers.dat",
-        "servers.dat_old",
-        "usercache.json",
-        "usernamecache.json",
-        "launcher_profiles.json",
-        "launcher_accounts.json",
-    }
 
     def __init__(self, data_dir: Path, api_base_resolver):
         self.paths = LibraryPaths(Path(data_dir))
@@ -212,9 +192,6 @@ class LibraryService:
                 return legacy_dir
         return stable_dir
 
-    def build_archive_path(self, item: dict) -> Path:
-        return self.build_install_dir(item) / "build.zip"
-
     def build_meta_path(self, item: dict) -> Path:
         return self.build_install_dir(item) / self.BUILD_META_FILE_NAME
 
@@ -253,73 +230,6 @@ class LibraryService:
         actual = str(meta.get("updated_at") or "").strip()
         return bool(actual and actual == expected)
 
-    def extract_build_archive(self, archive_path: Path, dest_dir: Path) -> None:
-        if not archive_path.is_file():
-            return
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(archive_path, "r") as archive:
-            for member in archive.namelist():
-                if not member or member.endswith("/"):
-                    continue
-                normalized = Path(member)
-                if normalized.is_absolute() or ".." in normalized.parts:
-                    continue
-                target_path = dest_dir / normalized
-                target_path.parent.mkdir(parents=True, exist_ok=True)
-                with archive.open(member) as src, target_path.open("wb") as dst:
-                    shutil.copyfileobj(src, dst)
-
-    def install_or_update_build(self, target_item: dict, archive_path: Path, *, source_item: dict | None = None) -> None:
-        install_dir = self.build_install_dir(target_item)
-        install_dir.mkdir(parents=True, exist_ok=True)
-        existing_install = self.is_build_installed(target_item)
-
-        with tempfile.TemporaryDirectory(prefix="lota-build-", dir=str(self.paths.downloads_dir)) as temp_dir_raw:
-            staging_dir = Path(temp_dir_raw) / "staging"
-            staging_dir.mkdir(parents=True, exist_ok=True)
-            self.extract_build_archive(archive_path, staging_dir)
-
-            if not existing_install:
-                self._copy_all_build_files(staging_dir, install_dir)
-                self._write_build_meta(
-                    target_item,
-                    source_item=source_item,
-                    managed_files=sorted(self._scan_managed_files(staging_dir)),
-                )
-                return
-
-            new_managed_files = self._scan_managed_files(staging_dir)
-            previous_meta = self.load_build_meta(target_item)
-            previous_managed_files = previous_meta.get("managed_files")
-            if not isinstance(previous_managed_files, list):
-                previous_managed_files = []
-
-            for rel_path in previous_managed_files:
-                rel = str(rel_path or "").replace("\\", "/").strip().lstrip("/")
-                if not rel or rel in new_managed_files:
-                    continue
-                target_path = install_dir / rel
-                try:
-                    if target_path.is_file():
-                        target_path.unlink()
-                    self._cleanup_empty_parent_dirs(target_path.parent, install_dir)
-                except OSError:
-                    continue
-
-            for rel in sorted(new_managed_files):
-                src = staging_dir / rel
-                dst = install_dir / rel
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(src, dst)
-
-            self._copy_missing_protected_files(staging_dir, install_dir)
-
-            self._write_build_meta(
-                target_item,
-                source_item=source_item,
-                managed_files=sorted(new_managed_files),
-            )
-
     def _write_build_meta(self, target_item: dict, *, source_item: dict | None = None, managed_files: list[str] | None = None) -> None:
         meta_path = self.build_meta_path(target_item)
         source = source_item or target_item
@@ -334,75 +244,28 @@ class LibraryService:
         }
         meta_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    def _scan_managed_files(self, root: Path) -> set[str]:
-        managed: set[str] = set()
-        for path in root.rglob("*"):
-            if not path.is_file():
-                continue
-            rel = path.relative_to(root).as_posix()
-            if self._is_protected_rel_path(rel):
-                continue
-            managed.add(rel)
-        return managed
-
-    def _copy_all_build_files(self, root: Path, install_dir: Path) -> None:
-        for path in root.rglob("*"):
-            if not path.is_file():
-                continue
-            rel = path.relative_to(root)
-            dst = install_dir / rel
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(path, dst)
-
-    def _copy_missing_protected_files(self, root: Path, install_dir: Path) -> None:
-        for path in root.rglob("*"):
-            if not path.is_file():
-                continue
-            rel = path.relative_to(root).as_posix()
-            if not self._is_protected_rel_path(rel):
-                continue
-            dst = install_dir / rel
-            if dst.exists():
-                continue
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(path, dst)
-
-    def _is_protected_rel_path(self, rel_path: str) -> bool:
-        rel = str(rel_path or "").replace("\\", "/").strip().lstrip("/")
-        if not rel:
-            return True
-        top = rel.split("/", 1)[0].lower()
-        if top in self.PROTECTED_TOP_LEVEL_DIRS:
-            return True
-        filename = rel.rsplit("/", 1)[-1].lower()
-        if filename in self.WINDOWS_SYSTEM_FILES:
-            return True
-        if "/" not in rel and rel.lower() in self.PROTECTED_TOP_LEVEL_FILES:
-            return True
-        if rel == self.BUILD_META_FILE_NAME:
-            return True
-        return False
-
-    def _cleanup_empty_parent_dirs(self, path: Path, stop_dir: Path) -> None:
-        current = path
-        stop_resolved = stop_dir.resolve()
-        while True:
-            try:
-                current_resolved = current.resolve()
-            except OSError:
-                return
-            if current_resolved == stop_resolved:
-                return
-            try:
-                current.rmdir()
-            except OSError:
-                return
-            current = current.parent
+    def sync_build(
+        self,
+        target_item: dict,
+        *,
+        token: str,
+        source_item: dict | None = None,
+        progress: ProgressCallback = None,
+    ) -> None:
+        BuildSync(
+            api_base_resolver=self._api_base_resolver,
+            token=token,
+            build_id=int((source_item or target_item).get("id")),
+            install_dir=self.build_install_dir(target_item),
+            progress=progress,
+        ).run()
+        self._write_build_meta(target_item, source_item=source_item, managed_files=[])
 
     def delete_build_files(self, item: dict) -> bool:
         build_dir = self.build_install_dir(item)
         if not build_dir.exists():
             return False
+        remove_closed_links(build_dir)
         shutil.rmtree(build_dir)
         return True
 

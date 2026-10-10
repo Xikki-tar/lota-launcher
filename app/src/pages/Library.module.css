@@ -115,36 +115,6 @@
 .badgeWarn     { background: rgba(244, 145, 56, 0.18); color: #F2B46B; border-color: rgba(244, 145, 56, 0.45); }
 .badgeSelected { background: rgba(245, 180, 73, 0.18); color: #F5B449; border-color: rgba(245, 180, 73, 0.5); }
 
-.dlProgress {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-shrink: 0;
-}
-
-.dlBar {
-  flex: 1;
-  height: 8px;
-  background: rgba(20, 14, 10, 0.92);
-  border: 1px solid #3A2A1A;
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-.dlFill {
-  height: 100%;
-  background: linear-gradient(to right, rgba(245, 180, 73, 0.95), rgba(224, 118, 43, 0.95));
-  border-radius: 6px;
-  transition: width 0.4s ease;
-}
-
-.dlText {
-  font-size: 12px;
-  color: #A58E75;
-  min-width: 32px;
-  text-align: right;
-}
-
 .infoActions {
   display: flex;
   flex-wrap: wrap;

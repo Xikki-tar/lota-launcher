@@ -17,6 +17,8 @@ export interface UpdateTaskStatus {
   state?: string;
   progress?: number;
   error?: string | null;
+  file?: string | null;
+  speed?: number;
   result?: { relaunch_path?: string; version?: string } | null;
 }
 

@@ -4,6 +4,6 @@ export const win = {
   close: () => invoke("close_window"),
   minimize: () => invoke("minimize_window"),
   toggleMaximize: () => invoke("toggle_maximize"),
-  hide: () => invoke("hide_window"),
+  hideUntilGameExit: () => invoke("hide_until_game_exit"),
   show: () => invoke("show_window"),
 };

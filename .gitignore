@@ -27,6 +27,7 @@ Thumbs.db
 devtools/
 .tools/
 .dev-port
+auth/build_api.py
 /target/
 /$tmp/
 *.swp

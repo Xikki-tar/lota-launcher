@@ -137,3 +137,9 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(245, 180, 73, 0.75);
 }
+
+.app-hidden *,
+.app-hidden *::before,
+.app-hidden *::after {
+  animation-play-state: paused !important;
+}
