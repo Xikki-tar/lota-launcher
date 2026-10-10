@@ -9,6 +9,7 @@ import ssl
 import tempfile
 import itertools
 import threading
+import re
 import time
 from collections import deque
 from datetime import datetime
@@ -160,11 +161,41 @@ sys.stderr = _LogWriter(sys.__stderr__, "[ERR] ")
 import logging as _logging
 
 class _WerkzeugFilter(_logging.Filter):
-    _SKIP = ("/debug/logs", "/play/state", "/skin/head")
+    _SKIP = ("/debug/logs", "/play/state", "/skin/head", "/task/", "/tasks/active_downloads")
     def filter(self, record: _logging.LogRecord) -> bool:
         msg = record.getMessage()
         return not any(s in msg for s in self._SKIP)
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+class _ConsoleLogHandler(_logging.Handler):
+    def emit(self, record: _logging.LogRecord) -> None:
+        try:
+            text = _ANSI_RE.sub("", self.format(record))
+        except Exception:
+            return
+        if record.levelno >= _logging.ERROR:
+            prefix, stream = "[ERR] ", sys.__stderr__
+        elif record.levelno >= _logging.WARNING:
+            prefix, stream = "[WARN] ", sys.__stderr__
+        else:
+            prefix, stream = "", sys.__stdout__
+        if stream:
+            try:
+                stream.write(text + "\n")
+                stream.flush()
+            except Exception:
+                pass
+        for line in text.splitlines():
+            if line.strip():
+                _log_append(f"{prefix}{line}")
+
+
+_root_logger = _logging.getLogger()
+_root_logger.handlers[:] = [_ConsoleLogHandler()]
+_root_logger.setLevel(_logging.INFO)
+_logging.captureWarnings(True)
 _logging.getLogger("werkzeug").addFilter(_WerkzeugFilter())
 
 
@@ -713,39 +744,20 @@ def library_download():
 
     def run():
         try:
-            base_url = get_api_base()
-            build_id = int((source_item or item).get("id"))
-            archive_path = lib.build_archive_path(item)
-            archive_path.parent.mkdir(parents=True, exist_ok=True)
+            meter = _SpeedMeter()
 
-            with http.post(
-                f"{base_url}/api/build/download",
-                json={"token": token, "build_id": build_id},
-                stream=True, timeout=120,
-            ) as resp:
-                if resp.status_code != 200:
-                    _task_done(task_id, f"HTTP {resp.status_code}")
-                    return
-                total = int(resp.headers.get("Content-Length") or 0)
-                downloaded = 0
-                meter = _SpeedMeter()
-                with archive_path.open("wb") as f:
-                    for chunk in resp.iter_content(chunk_size=1024 * 256):
-                        if not chunk:
-                            continue
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        meter.add(len(chunk))
-                        _task_progress(
-                            task_id,
-                            min(90, int(downloaded * 90 / total)) if total > 0 else None,
-                            file=archive_path.name,
-                            speed=meter.speed(),
-                        )
+            def on_progress(name: str, delta: int, done: int, total: int):
+                if delta > 0:
+                    meter.add(delta)
+                _task_progress(
+                    task_id,
+                    min(99, int(done * 99 / total)) if total > 0 else None,
+                    file=name or None,
+                    speed=meter.speed(),
+                )
 
-            _task_progress(task_id, speed=0)
-            lib.install_or_update_build(item, archive_path, source_item=source_item)
-            _task_progress(task_id, 100)
+            lib.sync_build(item, token=token, source_item=source_item, progress=on_progress)
+            _task_progress(task_id, 100, speed=0)
             _task_done(task_id)
             print(f"[library] download done: build_key={build_key}", flush=True)
         except Exception as exc:
@@ -860,6 +872,156 @@ def tasks_active_downloads():
     return jsonify({"active": count > 0, "count": count})
 
 
+class _LaunchReport:
+    def __init__(self):
+        self.lines: list[str] = []
+        self.started = time.monotonic()
+        self.last = self.started
+        self.hidden: list[str] = []
+
+    def hide(self, path) -> None:
+        for value in {str(path), os.path.realpath(str(path))}:
+            if value and value not in self.hidden:
+                self.hidden.append(value)
+        self.hidden.sort(key=len, reverse=True)
+
+    def add(self, text: str, console: bool = True) -> None:
+        for value in self.hidden:
+            text = text.replace(value, "<hidden>")
+        line = f"[launch] {text}"
+        self.lines.append(line)
+        if console:
+            print(line, flush=True)
+
+    def section(self, title: str) -> None:
+        self.add(f"=== {title} ===")
+
+    def step(self, name: str) -> None:
+        now = time.monotonic()
+        self.add(f"{name}: {now - self.last:.2f}s (total {now - self.started:.2f}s)")
+        self.last = now
+
+    def write_to(self, path: Path) -> None:
+        try:
+            with path.open("w", encoding="utf-8") as out:
+                out.write("\n".join(self.lines) + "\n\n")
+        except OSError:
+            pass
+
+
+_SECRET_ARGS = ("--accessToken", "--clientId", "--xuid")
+
+
+def _report_environment(report: _LaunchReport, settings: dict) -> None:
+    import platform as _platform
+    report.section("environment")
+    report.add(f"time: {datetime.now().isoformat(timespec='seconds')}")
+    report.add(f"os: {_platform.platform()} ({_platform.machine()})")
+    report.add(f"python: {sys.version.split()[0]}, frozen: {bool(getattr(sys, 'frozen', False))}")
+    report.add(f"data dir: {get_data_dir()}")
+    try:
+        report.add(f"api base: {get_api_base()}")
+    except Exception as exc:
+        report.add(f"api base: unresolved ({type(exc).__name__}: {exc})")
+    report.section("settings")
+    for key in ("auto_java_version", "java_path", "mem_min_mb", "mem_max_mb", "jvm_args", "disable_openal", "language", "selected_build"):
+        report.add(f"{key}: {settings.get(key)!r}")
+
+
+def _report_java(report: _LaunchReport, java_path: str, mode: str) -> None:
+    from auth.java_finder import get_java_major_version, get_java_version
+    import shutil as _shutil
+    resolved = java_path if os.path.isfile(java_path) else (_shutil.which(java_path) or java_path)
+    report.section("java")
+    report.add(f"mode: {mode}")
+    report.add(f"path: {java_path}")
+    if resolved != java_path:
+        report.add(f"resolved: {resolved}")
+    report.add(f"version: {get_java_version(resolved)}")
+    report.add(f"major: {get_java_major_version(resolved)}")
+
+
+def _report_build(report: _LaunchReport, build_key: str, game_dir: Path) -> None:
+    from services.build_sync import CLOSED_DIR, load_state
+    report.section("build")
+    report.add(f"build key: {build_key}")
+    report.add(f"game dir: {game_dir}")
+    state = load_state(game_dir)
+    units = state.get("units") or {}
+    closed = [p for p, e in units.items() if isinstance(e, dict) and e.get("closed")]
+    report.add(f"build id: {state.get('build_id')}, units: {len(units)}, closed: {len(closed)}")
+    for path in closed:
+        payload = game_dir / CLOSED_DIR / str(units[path].get("payload") or "")
+        size = payload.stat().st_size if payload.is_file() else None
+        report.add(f"closed unit: {path} -> {payload.name} ({size if size is not None else 'MISSING'} bytes)")
+    mods_dir = game_dir / "mods"
+    mods = sorted(p.name for p in mods_dir.glob("*.jar")) if mods_dir.is_dir() else []
+    disabled = sorted(p.name for p in mods_dir.glob("*.disabled")) if mods_dir.is_dir() else []
+    report.add(f"mods: {len(mods)} enabled, {len(disabled)} disabled")
+    for name in mods:
+        report.add(f"  mod: {name}", console=False)
+    for name in disabled:
+        report.add(f"  disabled: {name}", console=False)
+
+
+def _report_bundle(report: _LaunchReport, bundle_state) -> None:
+    report.section("protected content")
+    if bundle_state is None:
+        report.add("none")
+        return
+    report.hide(bundle_state.temp_dir)
+    for link in bundle_state.links:
+        report.add(f"linked: {link}")
+    for original, hidden in bundle_state.hidden:
+        report.add(f"hidden during game: {original} -> {hidden.name}")
+    report.add(f"overlay files: {len(bundle_state.written)}, backups: {len(bundle_state.backups)}, disabled mods: {len(bundle_state.disabled)}")
+    for original, renamed in bundle_state.disabled:
+        report.add(f"  disabled duplicate: {original.name}", console=False)
+    for arg in bundle_state.game_args:
+        report.add(f"game arg: {arg}")
+
+
+def _report_version(report: _LaunchReport, prepared) -> None:
+    data = prepared.version_json
+    report.section("minecraft")
+    report.add(f"version: {prepared.version_id} (inherits {data.get('inheritsFrom') or '-'})")
+    report.add(f"main class: {data.get('mainClass')}")
+    report.add(f"asset index: {(data.get('assetIndex') or {}).get('id')}")
+    report.add(f"libraries: {len(data.get('libraries') or [])}")
+    report.add(f"versions dir: {prepared.versions_dir}")
+    report.add(f"libraries dir: {prepared.libraries_dir}")
+    report.add(f"assets dir: {prepared.assets_dir}")
+    report.add(f"natives dir: {prepared.natives_dir}")
+
+
+def _report_command(report: _LaunchReport, argv: list[str], cwd) -> None:
+    report.section("command")
+    report.add(f"cwd: {cwd}")
+    report.add(f"executable: {argv[0] if argv else '-'}")
+    hide_next = False
+    cp_next = False
+    for index, arg in enumerate(argv[1:], start=1):
+        if hide_next:
+            report.add(f"arg[{index}]: ***")
+            hide_next = False
+            continue
+        if cp_next:
+            entries = [e for e in arg.split(os.pathsep) if e]
+            missing = [e for e in entries if not os.path.exists(e)]
+            report.add(f"arg[{index}]: <classpath: {len(entries)} entries, {len(missing)} missing>")
+            for entry in entries:
+                report.add(f"  cp: {entry}", console=False)
+            for entry in missing:
+                report.add(f"  cp MISSING: {entry}")
+            cp_next = False
+            continue
+        report.add(f"arg[{index}]: {arg}")
+        if arg in _SECRET_ARGS:
+            hide_next = True
+        elif arg in ("-cp", "-classpath", "--class-path"):
+            cp_next = True
+
+
 _play_state: dict = {"state": "idle", "status": "", "error": None}
 _play_lock = threading.Lock()
 _play_meter: _SpeedMeter | None = None
@@ -935,8 +1097,10 @@ def play_start():
         _play_meter = meter
         set_download_listener(on_download_bytes)
 
+        report = _LaunchReport()
         try:
             settings = load_settings()
+            _report_environment(report, settings)
             allow_update = True
             build_key = service.ensure_latest_build_selected(
                 status=set_status, progress=set_progress, allow_build_update=allow_update
@@ -947,32 +1111,42 @@ def play_start():
                 print("[play] no builds available", flush=True)
                 return
             print(f"[play] build selected: {build_key}", flush=True)
+            report.step("build check")
 
             from services.play_service import resolve_custom_java, system_openal_jvm_args
             custom_java = str(settings.get("java_path") or "").strip()
             if settings.get("auto_java_version", True) or not custom_java:
+                java_mode = "auto (launcher Oracle JDK 21)" if settings.get("auto_java_version", True) else "auto (no custom path set)"
                 java_path = service.ensure_oracle_java_21(status=set_status, progress=set_progress)
             else:
+                java_mode = "custom"
                 java_path = resolve_custom_java(custom_java)
             print(f"[play] java_path: {java_path}", flush=True)
+            _report_java(report, java_path, java_mode)
+            report.step("java ready")
 
             set_status("Запуск...")
 
             from minecraft.mc_client import ensure_forge_version, prepare_version
             from minecraft.mc_launch import build_launch_spec
-            from auth.auth_storage import get_data_dir
             import platform
 
             game_dir = (get_data_dir() / "library" / build_key)
             if not game_dir.is_dir():
                 game_dir = get_data_dir() / "minecraft"
 
+            _report_build(report, build_key, game_dir)
             bundle_state = service.prepare_bundle_files(game_dir)
+            _report_bundle(report, bundle_state)
+            report.step("protected content ready")
             try:
                 shared_game_dir = get_data_dir() / "minecraft"
                 versions_dir = shared_game_dir / "versions"
                 version_id = ensure_forge_version(versions_dir, java_path, shared_game_dir, status=set_status)
+                report.step("forge ready")
                 prepared = prepare_version(version_id, progress=set_progress, status=set_status)
+                _report_version(report, prepared)
+                report.step("libraries and assets ready")
 
                 auth = load_auth_data() or {}
                 username = str(settings.get("offline_username") or auth.get("username") or "Player")
@@ -994,6 +1168,12 @@ def play_start():
                 )
 
                 argv = spec.argv + (bundle_state.game_args if bundle_state else [])
+                report.section("launch")
+                report.add(f"player: {username}")
+                report.add(f"memory: -Xms{mem_min}M -Xmx{mem_max}M")
+                report.add(f"user jvm args: {settings.get('jvm_args') or '-'}")
+                report.add(f"effective jvm args: {jvm_args or '-'}")
+                _report_command(report, argv, spec.cwd)
 
                 import subprocess
                 proc = subprocess.Popen(
@@ -1002,14 +1182,18 @@ def play_start():
                     text=True, encoding="utf-8", errors="replace",
                 )
                 print(f"[play] process launched, pid={proc.pid}", flush=True)
+                report.add(f"pid: {proc.pid}")
+                report.step("process started")
                 with _play_lock:
                     _play_state.update({"state": "launched", "status": "Игра запущена", "pid": proc.pid, "_proc": proc, "mod_error": None})
 
                 log_path = get_data_dir() / "logs" / f"minecraft_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
                 log_path.parent.mkdir(parents=True, exist_ok=True)
+                report.add(f"minecraft log: {log_path}")
+                report.write_to(log_path)
 
                 def _pipe_mc_logs():
-                    with log_path.open("w", encoding="utf-8") as log_file:
+                    with log_path.open("a", encoding="utf-8") as log_file:
                         for line in proc.stdout:
                             clean = line.rstrip()
                             _log_append("[MC] " + clean, persist=False)
@@ -1024,6 +1208,7 @@ def play_start():
 
                 proc.wait()
                 log_thread.join(timeout=5)
+                print(f"[launch] game ran for {time.monotonic() - report.last:.0f}s, exit code {proc.returncode}", flush=True)
             finally:
                 service.cleanup_bundle_files(bundle_state)
 
@@ -1045,6 +1230,14 @@ def play_start():
 
         except Exception as exc:
             print(f"[play] launch failed: {type(exc).__name__}: {exc}", flush=True)
+            report.add(f"FAILED after {time.monotonic() - report.started:.2f}s: {type(exc).__name__}: {exc}")
+            import traceback
+            for line in traceback.format_exc().splitlines():
+                report.add(line, console=False)
+            failed_log = get_data_dir() / "logs" / f"launch_failed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+            failed_log.parent.mkdir(parents=True, exist_ok=True)
+            report.write_to(failed_log)
+            print(f"[launch] report saved: {failed_log}", flush=True)
             with _play_lock:
                 _play_state.update({"state": "error", "error": _friendly_play_error(exc)})
         finally:

@@ -9,9 +9,9 @@ import subprocess
 import tarfile
 import tempfile
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import requests
 from PySide6.QtCore import QThread, Signal
@@ -22,6 +22,18 @@ from auth.auth_storage import get_data_dir, load_auth_data, load_settings, save_
 from auth.java_finder import find_java_candidates, get_java_major_version, get_java_version
 from minecraft.mc_client import ensure_forge_version, prepare_version, report_download_bytes
 from minecraft.mc_launch import build_launch_spec
+from services.build_sync import (
+    CLOSED_DIR,
+    HIDDEN_SUFFIX,
+    closed_units,
+    decrypt_pack_file,
+    extract_zip,
+    is_link,
+    link_dir,
+    load_state,
+    remove_closed_links,
+    remove_link,
+)
 from services.library_service import LibraryService
 from desktop_integration import windows_hidden_subprocess_kwargs
 from window.i18n import t
@@ -339,6 +351,8 @@ class BundleState:
     backups: list[tuple[Path, Path]]
     disabled: list[tuple[Path, Path]]
     game_args: list[str]
+    links: list[Path] = field(default_factory=list)
+    hidden: list[tuple[Path, Path]] = field(default_factory=list)
 
 
 def _random_name() -> str:
@@ -536,38 +550,20 @@ class PlayService:
         if not token:
             raise RuntimeError(t("play_error_build_auth"))
         try:
-            build_id = int((source_item or item).get("id"))
+            int((source_item or item).get("id"))
         except Exception:
             raise RuntimeError(t("play_error_build_unavailable"))
 
         if status:
             status(t("play_status_build_download"))
-        base_url = get_api_base()
-        archive_path = library_service.build_archive_path(item)
-        archive_path.parent.mkdir(parents=True, exist_ok=True)
-        with requests.post(
-            f"{base_url}/api/build/download",
-            json={"token": token, "build_id": build_id},
-            stream=True,
-            timeout=120,
-        ) as response:
-            if response.status_code != 200:
-                raise RuntimeError(t("library_download_failed").format(message=f"HTTP {response.status_code}"))
-            total = int(response.headers.get("Content-Length") or 0)
-            downloaded = 0
-            with archive_path.open("wb") as output:
-                for chunk in response.iter_content(chunk_size=1024 * 256):
-                    if not chunk:
-                        continue
-                    output.write(chunk)
-                    downloaded += len(chunk)
-                    report_download_bytes(archive_path.name, len(chunk))
-                    if progress and total > 0:
-                        progress(max(0, min(100, int(downloaded * 100 / total))))
 
-        if status:
-            status(t("play_status_build_extract"))
-        library_service.install_or_update_build(item, archive_path, source_item=source_item)
+        def on_progress(name: str, delta: int, done: int, total: int):
+            if delta > 0 and name:
+                report_download_bytes(name, delta)
+            if progress and total > 0:
+                progress(max(0, min(100, int(done * 100 / total))))
+
+        library_service.sync_build(item, token=token, source_item=source_item, progress=on_progress)
 
     def ensure_oracle_java_21(self, status=None, progress=None) -> str:
         current = self._oracle_java_executable()
@@ -704,38 +700,78 @@ class PlayService:
         aes = AESGCM(key32)
         return aes.decrypt(iv, ciphertext, b"PACK" + b"\x01")
 
-    def prepare_bundle_files(self, game_dir: Path) -> BundleState | None:
-        mods_dir = game_dir / "mods"
-        _remove_stale_bundle_dirs()
-        _restore_disabled_mods(mods_dir)
-
+    def _legacy_bundle(self, game_dir: Path) -> tuple[Path, int] | None:
         manifest_path = self.bundle_manifest_path(game_dir)
         if not manifest_path.exists():
             return None
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            encrypted_path = game_dir / str(manifest.get("archive") or "")
+            build_id = int(manifest.get("build_id"))
         except Exception:
             return None
-        if not isinstance(manifest, dict):
+        if not manifest.get("archive") or not encrypted_path.is_file():
             return None
-        encrypted_rel = str(manifest.get("archive") or "")
-        build_id = manifest.get("build_id")
-        if not encrypted_rel or not build_id:
+        return encrypted_path, build_id
+
+    def _overlay_tree(self, root: Path, game_dir: Path, maven_dir: Path, group: str, coords: list[str], state: BundleState) -> None:
+        mods_dir = game_dir / "mods"
+        for src in sorted(p for p in root.rglob("*") if p.is_file()):
+            rel = src.relative_to(root)
+            if len(rel.parts) == 2 and rel.parts[0].lower() == "mods" and src.suffix.lower() == ".jar":
+                artifact = _random_name()
+                dst = maven_dir / group / artifact / "1" / f"{artifact}-1.jar"
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                src.replace(dst)
+                coords.append(f"{group}:{artifact}:1")
+                duplicate = mods_dir / src.name
+                if duplicate.is_file():
+                    disabled = duplicate.with_name(duplicate.name + BUNDLE_DISABLED_SUFFIX)
+                    duplicate.replace(disabled)
+                    state.disabled.append((disabled, duplicate))
+                continue
+
+            dst = game_dir / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if dst.exists():
+                backup = dst.with_suffix(dst.suffix + ".bak")
+                dst.replace(backup)
+                state.backups.append((backup, dst))
+            shutil.copy2(src, dst)
+            state.written.append(dst)
+
+    def _link_closed_dir(self, link: Path, target: Path, state: BundleState) -> None:
+        target.mkdir(parents=True, exist_ok=True)
+        link.parent.mkdir(parents=True, exist_ok=True)
+        if is_link(link):
+            remove_link(link)
+        if link.exists():
+            hidden = link.with_name(link.name + HIDDEN_SUFFIX)
+            if hidden.exists():
+                raise RuntimeError(f"{link} and {hidden} both exist")
+            link.replace(hidden)
+            state.hidden.append((hidden, link))
+        link_dir(link, target)
+        state.links.append(link)
+
+    def prepare_bundle_files(self, game_dir: Path) -> BundleState | None:
+        _remove_stale_bundle_dirs()
+        _restore_disabled_mods(game_dir / "mods")
+        remove_closed_links(game_dir)
+
+        closed = closed_units(game_dir)
+        legacy = self._legacy_bundle(game_dir)
+        if not closed and legacy is None:
             return None
         try:
-            build_id_int = int(build_id)
-        except Exception:
-            return None
+            build_id = legacy[1] if legacy else int(load_state(game_dir).get("build_id"))
+        except (TypeError, ValueError):
+            raise RuntimeError(t("play_bundle_key_error"))
 
-        encrypted_path = game_dir / encrypted_rel
-        if not encrypted_path.exists():
-            return None
-
-        key32 = self.request_bundle_key(build_id_int)
+        key32 = self.request_bundle_key(build_id)
         if not key32:
             raise RuntimeError(t("play_bundle_key_error"))
 
-        plain_zip = self.decrypt_archive(encrypted_path.read_bytes(), key32)
         state = BundleState(
             temp_dir=Path(tempfile.mkdtemp(prefix="")),
             written=[],
@@ -744,42 +780,31 @@ class PlayService:
             game_args=[],
         )
         _save_session_dirs([state.temp_dir])
-        payload_dir = state.temp_dir / _random_name()
         maven_dir = state.temp_dir / _random_name()
         group = _random_name()
         coords: list[str] = []
         try:
-            with zipfile.ZipFile(io.BytesIO(plain_zip), "r") as archive:
-                archive.extractall(payload_dir)
+            if legacy:
+                payload_dir = state.temp_dir / _random_name()
+                extract_zip(io.BytesIO(self.decrypt_archive(legacy[0].read_bytes(), key32)), payload_dir)
+                self._overlay_tree(payload_dir, game_dir, maven_dir, group, coords, state)
+                shutil.rmtree(payload_dir, ignore_errors=True)
 
-            for src in sorted(p for p in payload_dir.rglob("*") if p.is_file()):
-                rel = src.relative_to(payload_dir)
-                if len(rel.parts) == 2 and rel.parts[0].lower() == "mods" and src.suffix.lower() == ".jar":
-                    artifact = _random_name()
-                    dst = maven_dir / group / artifact / "1" / f"{artifact}-1.jar"
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    src.replace(dst)
-                    coords.append(f"{group}:{artifact}:1")
-                    duplicate = mods_dir / src.name
-                    if duplicate.is_file():
-                        disabled = duplicate.with_name(duplicate.name + BUNDLE_DISABLED_SUFFIX)
-                        duplicate.replace(disabled)
-                        state.disabled.append((disabled, duplicate))
-                    continue
-
-                dst = game_dir / rel
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                if dst.exists():
-                    backup = dst.with_suffix(dst.suffix + ".bak")
-                    dst.replace(backup)
-                    state.backups.append((backup, dst))
-                shutil.copy2(src, dst)
-                state.written.append(dst)
+            for path, entry in closed:
+                rel = PurePosixPath(path)
+                root = state.temp_dir / _random_name()
+                plain = state.temp_dir / _random_name()
+                decrypt_pack_file(game_dir / CLOSED_DIR / str(entry["payload"]), key32, plain)
+                extract_zip(plain, root)
+                plain.unlink(missing_ok=True)
+                if entry.get("type") == "dir" and rel.parts[0].lower() != "mods":
+                    self._link_closed_dir(game_dir.joinpath(*rel.parts), root.joinpath(*rel.parts), state)
+                else:
+                    self._overlay_tree(root, game_dir, maven_dir, group, coords, state)
         except Exception:
             self.cleanup_bundle_files(state)
             raise
 
-        shutil.rmtree(payload_dir, ignore_errors=True)
         if coords:
             state.game_args = ["--fml.mavenRoots", str(maven_dir), "--fml.mods", ",".join(coords)]
         return state
@@ -787,6 +812,17 @@ class PlayService:
     def cleanup_bundle_files(self, bundle_state: BundleState | None) -> None:
         if not bundle_state:
             return
+        for link in bundle_state.links:
+            try:
+                remove_link(link)
+            except OSError:
+                pass
+        for hidden, original in bundle_state.hidden:
+            try:
+                if hidden.exists() and not original.exists():
+                    hidden.replace(original)
+            except OSError:
+                pass
         for path in bundle_state.written:
             try:
                 if path.exists():
