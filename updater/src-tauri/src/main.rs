@@ -198,6 +198,10 @@ async fn launch_launcher_and_exit(app: &AppHandle, dir: &Path) {
 
 async fn run_update_flow(app: AppHandle) {
     let dir = exe_dir();
+    if option_env!("LOTA_BUILD_DISABLE_UPDATES").is_some() {
+        launch_launcher_and_exit(&app, &dir).await;
+        return;
+    }
     let local_version = read_local_version(&dir);
     emit_status(&app, "Проверяю обновления...");
 

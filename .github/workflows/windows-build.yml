@@ -23,7 +23,8 @@ jobs:
         shell: bash
         run: |
           echo "LOTA_BUILD_API_BASES=https://test.lota.work" >> "$GITHUB_ENV"
-          printf 'API_BASES = "https://test.lota.work"\n' > auth/build_api.py
+          echo "LOTA_BUILD_DISABLE_UPDATES=1" >> "$GITHUB_ENV"
+          printf 'API_BASES = "https://test.lota.work"\nUPDATES_DISABLED = True\n' > auth/build_api.py
 
       - name: Set up Python
         uses: actions/setup-python@v5

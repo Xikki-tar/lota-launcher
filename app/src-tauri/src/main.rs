@@ -20,6 +20,10 @@ fn windows_updater_bootstrap() -> bool {
 
     windows_cleanup_stray_appdata_dirs();
 
+    if option_env!("LOTA_BUILD_DISABLE_UPDATES").is_some() {
+        return false;
+    }
+
     if std::env::args().any(|a| a == "--skip-updater") {
         return false;
     }

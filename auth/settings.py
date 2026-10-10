@@ -5,6 +5,11 @@ try:
 except ImportError:
     _BUILD_API_BASES = ""
 
+try:
+    from auth.build_api import UPDATES_DISABLED
+except ImportError:
+    UPDATES_DISABLED = False
+
 DEFAULT_API_BASES = _BUILD_API_BASES or "https://ru.lota.work,https://eu.lota.work"
 
 API_BASE = (
