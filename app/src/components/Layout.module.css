@@ -387,4 +387,5 @@
 }
 
 .debugLineErr { color: #fca5a5; }
+.debugLineWarn { color: #fcd34d; }
 .debugLineMc  { color: #86efac; }

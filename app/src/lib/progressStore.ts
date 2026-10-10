@@ -1,13 +1,7 @@
 import { useCallback, useSyncExternalStore } from "react";
 
-const FAKE_CAP = 27;
-const TRANSITION_MS = 1000;
-
-type Phase = "fake" | "transition" | "real";
-
 export interface ProgressEntry {
   percent: number;
-  phase: Phase;
   file?: string | null;
   speed?: number;
 }
@@ -24,8 +18,6 @@ interface PollResult {
 
 const entries = new Map<string, ProgressEntry>();
 const listeners = new Map<string, Set<() => void>>();
-const fakeTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const transitionRafs = new Map<string, number>();
 const pollIntervals = new Map<string, ReturnType<typeof setInterval>>();
 
 function emit(id: string) {
@@ -48,63 +40,13 @@ export function setProgressMeta(id: string, meta: { file?: string | null; speed?
   emit(id);
 }
 
-function clearFakeTimer(id: string) {
-  const timer = fakeTimers.get(id);
-  if (timer) { clearTimeout(timer); fakeTimers.delete(id); }
+export function startProgress(id: string) {
+  setEntry(id, { percent: 0 });
 }
 
-function clearTransition(id: string) {
-  const raf = transitionRafs.get(id);
-  if (raf !== undefined) { cancelAnimationFrame(raf); transitionRafs.delete(id); }
-}
-
-function scheduleFakeStep(id: string) {
-  const entry = entries.get(id);
-  if (!entry || entry.phase !== "fake") return;
-  const x = entry.percent;
-  const delay = (1 + x * 0.5) * 1000;
-  const timer = setTimeout(() => {
-    const cur = entries.get(id);
-    if (!cur || cur.phase !== "fake") return;
-    setEntry(id, { percent: Math.min(FAKE_CAP - 1, cur.percent + 1), phase: "fake" });
-    scheduleFakeStep(id);
-  }, delay);
-  fakeTimers.set(id, timer);
-}
-
-export function startFakeProgress(id: string) {
-  clearFakeTimer(id);
-  clearTransition(id);
-  setEntry(id, { percent: 0, phase: "fake" });
-  scheduleFakeStep(id);
-}
-
-function beginRealProgress(id: string) {
-  clearFakeTimer(id);
-  clearTransition(id);
-  const from = entries.get(id)?.percent ?? 0;
-  const start = performance.now();
-
-  function tick(now: number) {
-    const t = Math.min(1, (now - start) / TRANSITION_MS);
-    setEntry(id, { percent: from + (FAKE_CAP - from) * t, phase: "transition" });
-    if (t < 1) {
-      transitionRafs.set(id, requestAnimationFrame(tick));
-    } else {
-      transitionRafs.delete(id);
-      setEntry(id, { percent: FAKE_CAP, phase: "real" });
-    }
-  }
-  transitionRafs.set(id, requestAnimationFrame(tick));
-}
-
-export function applyRealProgress(id: string, rawPercent: number) {
-  const entry = entries.get(id);
-  if (!entry) return;
-  if (entry.phase === "fake") { beginRealProgress(id); return; }
-  if (entry.phase === "transition") return;
-  const mapped = FAKE_CAP + Math.max(0, Math.min(100, rawPercent)) * (100 - FAKE_CAP) / 100;
-  setEntry(id, { percent: Math.max(entry.percent, mapped), phase: "real" });
+export function applyProgress(id: string, rawPercent: number) {
+  const percent = Math.max(0, Math.min(100, rawPercent));
+  setEntry(id, { percent: Math.max(entries.get(id)?.percent ?? 0, percent) });
 }
 
 function stopPolling(id: string) {
@@ -114,8 +56,6 @@ function stopPolling(id: string) {
 
 export function stopTracking(id: string) {
   stopPolling(id);
-  clearFakeTimer(id);
-  clearTransition(id);
   entries.delete(id);
   emit(id);
 }
@@ -145,7 +85,7 @@ export function trackTask(
   opts: { intervalMs?: number; onDone?: (result: PollResult) => void; onError?: (error?: string | null) => void } = {},
 ): void {
   if (isTracking(id)) return;
-  startFakeProgress(id);
+  startProgress(id);
 
   const intervalMs = opts.intervalMs ?? 800;
   let stopped = false;
@@ -167,10 +107,8 @@ export function trackTask(
 
     if (res.state === "done") {
       stopped = true;
-      setEntry(id, { percent: 100, phase: "real" });
+      setEntry(id, { percent: 100 });
       stopPolling(id);
-      clearFakeTimer(id);
-      clearTransition(id);
       opts.onDone?.(res);
       setTimeout(() => stopTracking(id), 400);
     } else if (res.state === "error") {
@@ -178,9 +116,7 @@ export function trackTask(
       stopTracking(id);
       opts.onError?.(res.error);
     } else if (typeof res.progress === "number") {
-      applyRealProgress(id, res.progress);
-    } else if (res.started && entries.get(id)?.phase === "fake") {
-      beginRealProgress(id);
+      applyProgress(id, res.progress);
     }
   }
 

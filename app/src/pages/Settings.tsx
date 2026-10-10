@@ -52,6 +52,7 @@ export default function Settings() {
   const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
 
   useEffect(() => { load(); }, [port]);
+  useEffect(() => { if (port) scanJava(false); }, [port]);
   useEffect(() => { getVersion().then(setAppVersion).catch(() => {}); }, []);
   useEffect(() => { invoke<string>("get_display_version").then(setDisplayVersion).catch(() => {}); }, []);
 
@@ -142,22 +143,27 @@ export default function Settings() {
     finally { setSaving(false); }
   }
 
-  async function scanJava() {
+  async function scanJava(pick: boolean) {
     setScanning(true);
     try {
       const res = await apiGet<{ candidates: JavaCandidate[] }>(port, "/java/scan", 0);
       const cands = res?.candidates ?? [];
       setJavaList(cands);
-      const java21 = cands.find(c => c.major === 21);
-      const best = java21 ?? cands[0];
-      if (best) set("java_path", best.path);
+      const best = cands.find(c => c.major === 21) ?? cands[0];
+      if (pick && best) chooseJava(best.path);
     } catch { /* ignore */ }
     finally { setScanning(false); }
   }
 
   async function handleBrowse() {
     const path = await open({ multiple: false, directory: false });
-    if (typeof path === "string") set("java_path", path);
+    if (typeof path === "string") chooseJava(path);
+  }
+
+  function chooseJava(path: string) {
+    setForm(prev => ({ ...prev, java_path: path, auto_java_version: false }));
+    setSaved(false);
+    setSaveError("");
   }
 
   function set<K extends keyof SettingsData>(key: K, value: SettingsData[K]) {
@@ -166,6 +172,7 @@ export default function Settings() {
     setSaveError("");
   }
 
+  const autoJava = form.auto_java_version ?? true;
   const javaPath = (form.java_path ?? "").trim();
   const javaVersionLabel = !javaPath || !javaInfo || javaInfo.path !== javaPath
     ? t("settings_java_version", "Версия: —")
@@ -231,34 +238,32 @@ export default function Settings() {
                   className={styles.field}
                   placeholder={t("settings_java_path_placeholder", "Путь к Java (java / javaw / бинарник)")}
                   value={form.java_path ?? ""}
-                  disabled={form.auto_java_version === true}
-                  onChange={e => set("java_path", e.target.value)}
+                  onChange={e => chooseJava(e.target.value)}
                 />
 
                 <div className={styles.pathBtns}>
                   <button
                     className={styles.btnSmall}
-                    disabled={form.auto_java_version === true}
                     onClick={handleBrowse}
                   >
                     {t("btn_browse", "Обзор")}
                   </button>
                   <button
                     className={styles.btnSmall}
-                    disabled={scanning || form.auto_java_version === true}
-                    onClick={scanJava}
+                    disabled={scanning}
+                    onClick={() => scanJava(true)}
                   >
-                    {scanning ? "Поиск..." : t("btn_auto_detect", "Автоопределение")}
+                    {scanning ? "Поиск..." : t("btn_auto_detect", "Найти Java")}
                   </button>
                 </div>
 
                 <label className={styles.checkRow}>
                   <input
                     type="checkbox"
-                    checked={form.auto_java_version ?? false}
+                    checked={form.auto_java_version ?? true}
                     onChange={e => set("auto_java_version", e.target.checked)}
                   />
-                  <span>{t("settings_auto_java", "Автоопределение версии Java")}</span>
+                  <span>{t("settings_auto_java", "Автоматически (лаунчер сам скачает Java 21)")}</span>
                 </label>
 
                 <div className={styles.javaList}>
@@ -270,8 +275,8 @@ export default function Settings() {
                     javaList.map((c, i) => (
                       <button
                         key={i}
-                        className={`${styles.javaListItem} ${form.java_path === c.path ? styles.javaListItemActive : ""}`}
-                        onClick={() => set("java_path", c.path)}
+                        className={`${styles.javaListItem} ${!autoJava && form.java_path === c.path ? styles.javaListItemActive : ""}`}
+                        onClick={() => chooseJava(c.path)}
                       >
                         <span className={styles.javaItemPath}>{c.path}</span>
                         <span className={styles.javaItemVersion}>Java {c.major ?? "?"}</span>

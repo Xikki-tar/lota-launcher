@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useBackend, apiGet, apiPost, invalidateCache } from "../lib/BackendContext";
 import { useI18n } from "../lib/I18nContext";
 import { win } from "../lib/tauri";
-import { startFakeProgress, applyRealProgress, stopTracking, setProgressMeta, useProgress } from "../lib/progressStore";
+import { startProgress, applyProgress, stopTracking, setProgressMeta, useProgress } from "../lib/progressStore";
 import DownloadProgress from "./DownloadProgress";
 import { isAppHidden, setAppHidden } from "../lib/appVisibility";
 import styles from "./Layout.module.css";
@@ -93,8 +93,9 @@ function DebugConsole({ port }: { port: number | null }) {
       <div className={styles.debugBody}>
         {lines.map((l, i) => (
           <div key={i} className={`${styles.debugLine} ${
-            l.startsWith("[ERR]") ? styles.debugLineErr :
-            l.startsWith("[MC]")  ? styles.debugLineMc  : ""
+            l.startsWith("[ERR]")  ? styles.debugLineErr  :
+            l.startsWith("[WARN]") ? styles.debugLineWarn :
+            l.startsWith("[MC]")   ? styles.debugLineMc   : ""
           }`}>{l}</div>
         ))}
         <div ref={bottomRef} />
@@ -180,10 +181,10 @@ export default function Layout({ onLogout }: LayoutProps) {
 
       const newState = data.state ?? "idle";
       if (newState === "running") {
-        setProgressMeta(PLAY_PROGRESS_ID, { file: data.file ?? null, speed: data.speed ?? 0 });
-        if (typeof data.progress === "number" && data.progress > 0) {
-          applyRealProgress(PLAY_PROGRESS_ID, data.progress);
+        if (typeof data.progress === "number") {
+          applyProgress(PLAY_PROGRESS_ID, data.progress);
         }
+        setProgressMeta(PLAY_PROGRESS_ID, { file: data.file ?? null, speed: data.speed ?? 0 });
       } else {
         stopTracking(PLAY_PROGRESS_ID);
       }
@@ -212,7 +213,7 @@ export default function Layout({ onLogout }: LayoutProps) {
       if (ps === "launched") {
         await apiPost(port, "/play/stop");
       } else {
-        startFakeProgress(PLAY_PROGRESS_ID);
+        startProgress(PLAY_PROGRESS_ID);
         await apiPost(port, "/play/start");
       }
       await pollPlayState();
