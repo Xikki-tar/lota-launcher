@@ -138,11 +138,17 @@ export default function Account() {
         setSkinVersion(v => v + 1);
       } else {
         const errMap: Record<string, string> = {
-          skin_too_large:      t("account_skin_too_large",      "Скин слишком большой. Максимум: 16 KiB."),
+          skin_too_large:      t("account_skin_too_large",      "Скин слишком большой. Максимальный размер: {max_human}.").replace("{max_human}", "16 KiB"),
           skin_bad_dimensions: t("account_skin_bad_dimensions", "Размер скина должен быть 64×32 или 64×64."),
           skin_bad_format:     t("account_skin_bad_format",     "Файл должен быть PNG-скином."),
+          conn_refused:        t("error_conn_refused",          "Ошибка соединения."),
         };
-        setMessage({ text: errMap[res.error] ?? res.error ?? t("account_skin_save_failed", "Не удалось загрузить скин."), ok: false });
+        const reason = errMap[res.error] ?? String(res.error ?? "");
+        const text = res.saved
+          ? t("account_skin_server_failed", "Скин сохранён в лаунчере, но не загружен на сервер:\n{error}").replace("{error}", reason)
+          : t("account_skin_save_failed", "Не удалось сохранить скин:\n{error}").replace("{error}", reason);
+        if (res.saved) setSkinVersion(v => v + 1);
+        setMessage({ text, ok: false });
       }
     } catch {
       setMessage({ text: t("error_conn_refused", "Ошибка соединения."), ok: false });

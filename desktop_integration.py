@@ -39,9 +39,7 @@ def windows_hidden_subprocess_kwargs() -> dict:
     except Exception:
         startupinfo = None
 
-    creationflags = 0
-    for flag_name in ("CREATE_NO_WINDOW", "DETACHED_PROCESS"):
-        creationflags |= int(getattr(subprocess, flag_name, 0) or 0)
+    creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0)
 
     kwargs = {"creationflags": creationflags}
     if startupinfo is not None:

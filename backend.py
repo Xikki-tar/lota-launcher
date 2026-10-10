@@ -1636,6 +1636,9 @@ def skin_model():
     return Response(buf.getvalue(), content_type="image/png", headers={"Cache-Control": "no-store"})
 
 
+_SKIN_MAX_BYTES = 16 * 1024
+
+
 @app.post("/account/skin/upload")
 def account_skin_upload():
     file = request.files.get("file")
@@ -1648,6 +1651,8 @@ def account_skin_upload():
     data = file.read()
     if not data:
         return jsonify({"ok": False, "error": "no_file"}), 400
+    if len(data) > _SKIN_MAX_BYTES:
+        return jsonify({"ok": False, "error": "skin_too_large"})
     if not data.startswith(b"\x89PNG"):
         return jsonify({"ok": False, "error": "skin_bad_format"})
 
@@ -1678,9 +1683,14 @@ def account_skin_upload():
             timeout=15,
         )
         resp = r.json() if r.headers.get("Content-Type", "").startswith("application/json") else {}
-        return jsonify({"ok": r.status_code == 200, "status_code": r.status_code, "data": resp, "saved": True})
     except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc), "saved": True})
+        print(f"[account] skin upload failed: {type(exc).__name__}: {exc}", flush=True)
+        return jsonify({"ok": False, "error": "conn_refused", "saved": True})
+    if r.status_code != 200 or not isinstance(resp, dict) or resp.get("ok") is not True:
+        error = (resp.get("error") if isinstance(resp, dict) else None) or f"http_{r.status_code}"
+        print(f"[account] skin upload rejected: HTTP {r.status_code}: {str(resp)[:300]}", flush=True)
+        return jsonify({"ok": False, "error": error, "status_code": r.status_code, "saved": True})
+    return jsonify({"ok": True, "status_code": r.status_code, "data": resp, "saved": True})
 
 
 @app.post("/account/discord/link")
