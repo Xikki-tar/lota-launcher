@@ -371,7 +371,8 @@ def _check_launcher_update_github(local_version: str) -> dict | None:
 
 @app.get("/update/check")
 def update_check():
-    mode = _update_mode()
+    from auth.settings import UPDATES_DISABLED
+    mode = None if UPDATES_DISABLED else _update_mode()
     if mode not in ("appimage", "macos-app"):
         return jsonify({"ok": True, "mode": mode, "update_available": False})
     local_version = str(request.args.get("version") or "0.0.0")
