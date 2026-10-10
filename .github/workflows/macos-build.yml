@@ -16,6 +16,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Use test API for dev builds
+        if: github.ref == 'refs/heads/dev'
+        shell: bash
+        run: |
+          echo "LOTA_BUILD_API_BASES=https://test.lota.work" >> "$GITHUB_ENV"
+          printf 'API_BASES = "https://test.lota.work"\n' > auth/build_api.py
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
