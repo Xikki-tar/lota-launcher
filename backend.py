@@ -58,7 +58,7 @@ from auth.auth_storage import (
 )
 from auth.api_base import get_api_base
 from services.library_service import LibraryService
-from window.i18n import set_language
+from window.i18n import set_language, t
 
 set_language()
 
@@ -414,18 +414,32 @@ def update_check():
     return jsonify(data)
 
 
+def _macos_app_update_blocker(target_app: Path) -> str | None:
+    if "/AppTranslocation/" in str(target_app) or not os.access(target_app.parent, os.W_OK):
+        return t("update_error_move_to_applications")
+    return None
+
+
 def _install_macos_app_update(zip_path: Path, target_app: Path) -> str:
     import shutil
-    import zipfile
+    import subprocess
 
     extract_dir = target_app.parent / f".lota-update-extract-{os.getpid()}"
+    shutil.rmtree(extract_dir, ignore_errors=True)
     extract_dir.mkdir(parents=True, exist_ok=True)
     try:
-        with zipfile.ZipFile(zip_path) as zf:
-            zf.extractall(extract_dir)
+        proc = subprocess.run(
+            ["/usr/bin/ditto", "-x", "-k", str(zip_path), str(extract_dir)],
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(f"ditto failed: {(proc.stderr or proc.stdout).strip()}")
         new_app = next((p for p in extract_dir.iterdir() if p.suffix == ".app"), None)
         if new_app is None:
             raise RuntimeError("update archive has no .app bundle")
+        if not os.access(new_app / "Contents" / "MacOS" / "lota-launcher", os.X_OK):
+            raise RuntimeError("update archive has no executable launcher binary")
 
         backup = target_app.with_name(target_app.name + ".old")
         shutil.rmtree(backup, ignore_errors=True)
@@ -465,6 +479,9 @@ def update_install():
     def run():
         tmp_path: Path | None = None
         try:
+            blocker = _macos_app_update_blocker(target_path) if mode == "macos-app" else None
+            if blocker:
+                raise RuntimeError(blocker)
             fd, tmp_name = tempfile.mkstemp(prefix="lota-update-", dir=str(target_path.parent))
             os.close(fd)
             tmp_path = Path(tmp_name)

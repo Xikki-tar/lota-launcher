@@ -8,9 +8,24 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
+    env:
+      MACOS_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      MACOS_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      MACOS_NOTARY_APPLE_ID: ${{ secrets.APPLE_ID }}
+      MACOS_NOTARY_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      MACOS_NOTARY_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
     steps:
       - name: Checkout
@@ -90,23 +105,42 @@ jobs:
 
       - name: Build Tauri app
         working-directory: app
-        run: npm run tauri build
+        shell: bash
+        run: |
+          if [ -n "$MACOS_CERTIFICATE" ] && [ -n "$MACOS_SIGNING_IDENTITY" ]; then
+            export APPLE_CERTIFICATE="$MACOS_CERTIFICATE"
+            export APPLE_CERTIFICATE_PASSWORD="$MACOS_CERTIFICATE_PASSWORD"
+            export APPLE_SIGNING_IDENTITY="$MACOS_SIGNING_IDENTITY"
+            if [ -n "$MACOS_NOTARY_APPLE_ID" ] && [ -n "$MACOS_NOTARY_PASSWORD" ] && [ -n "$MACOS_NOTARY_TEAM_ID" ]; then
+              export APPLE_ID="$MACOS_NOTARY_APPLE_ID"
+              export APPLE_PASSWORD="$MACOS_NOTARY_PASSWORD"
+              export APPLE_TEAM_ID="$MACOS_NOTARY_TEAM_ID"
+            fi
+          fi
+          npm run tauri build
+
+      - name: Verify bundle signature
+        run: |
+          app_path="$(find app/src-tauri/target/release/bundle/macos -maxdepth 1 -iname '*.app' | head -1)"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          lipo -archs "$app_path/Contents/MacOS/lota-launcher"
+          lipo -archs "$app_path/Contents/MacOS/backend"
 
       - name: Zip the .app bundle
         run: |
           app_path="$(find app/src-tauri/target/release/bundle/macos -maxdepth 1 -iname '*.app' | head -1)"
-          ditto -c -k --sequesterRsrc --keepParent "$app_path" lota-launcher-macos.zip
+          ditto -c -k --sequesterRsrc --keepParent "$app_path" "lota-launcher-macos-${{ matrix.arch }}.zip"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: lota-launcher-macos
+          name: lota-launcher-macos-${{ matrix.arch }}
           path: |
             app/src-tauri/target/release/bundle/dmg/*.dmg
-            lota-launcher-macos.zip
+            lota-launcher-macos-${{ matrix.arch }}.zip
 
       - name: Publish to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: lota-launcher-macos.zip
+          files: lota-launcher-macos-${{ matrix.arch }}.zip

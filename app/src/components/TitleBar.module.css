@@ -12,6 +12,10 @@
   -webkit-app-region: drag;
 }
 
+.mac {
+  padding-left: 78px;
+}
+
 /* Left side: logo + title + version, vertically centered */
 .left {
   display: flex;

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useOutletContext } from "react-router-dom";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useBackend, apiGet, apiPost } from "../lib/BackendContext";
 import { useI18n } from "../lib/I18nContext";
 import type { PageContext } from "../components/Layout";
@@ -71,7 +72,7 @@ function DiscordDialog({ command, discordUrl, onClose }: { command: string; disc
         <div className={styles.dialogCommand}>{command}</div>
         <div className={styles.dialogBtns}>
           {discordUrl && (
-            <button className={styles.btnDialogFull} onClick={() => window.open(discordUrl, "_blank")}>
+            <button className={styles.btnDialogFull} onClick={() => { openUrl(discordUrl).catch(() => {}); }}>
               {t("account_discord_open", "Открыть Discord")}
             </button>
           )}

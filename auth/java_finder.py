@@ -28,7 +28,7 @@ def get_java_version(java_path: str) -> str:
             [path, "-version"],
             capture_output=True,
             text=True,
-            timeout=3,
+            timeout=15,
             **windows_hidden_subprocess_kwargs(),
         )
         out = (p.stderr or p.stdout or "").strip()
@@ -139,18 +139,25 @@ def _find_linux() -> list[str]:
     return sorted(cands)
 
 
+MACOS_JAVA_STUB = "/usr/bin/java"
+
+
 def _find_macos() -> list[str]:
     cands = set()
 
     java = shutil.which("java")
-    if java:
+    if java and normalize_path(java) != MACOS_JAVA_STUB:
         cands.add(normalize_path(java))
 
+    jp = _candidate_from_java_home(os.environ.get("JAVA_HOME", ""))
+    if jp:
+        cands.add(normalize_path(jp))
+
     try:
-        p = subprocess.run(["/usr/libexec/java_home", "-V"], capture_output=True, text=True, timeout=3)
-        out = (p.stderr or p.stdout or "").strip()
+        p = subprocess.run(["/usr/libexec/java_home", "-V"], capture_output=True, text=True, timeout=10)
+        out = (p.stderr or "") + "\n" + (p.stdout or "")
         for line in out.splitlines():
-            m = re.search(r"(/Library/Java/JavaVirtualMachines/.*?/Contents/Home)$", line.strip())
+            m = re.search(r"\s(/\S.*/Contents/Home)$", line.rstrip())
             if m:
                 jp = _candidate_from_java_home(m.group(1))
                 if jp:
@@ -169,6 +176,23 @@ def _find_macos() -> list[str]:
                 jp = _candidate_from_java_home(home)
                 if jp:
                     cands.add(normalize_path(jp))
+
+    for prefix in ("/opt/homebrew/opt", "/usr/local/opt"):
+        if os.path.isdir(prefix):
+            for name in os.listdir(prefix):
+                if not name.startswith("openjdk"):
+                    continue
+                home = os.path.join(prefix, name, "libexec", "openjdk.jdk", "Contents", "Home")
+                jp = _candidate_from_java_home(home)
+                if jp:
+                    cands.add(normalize_path(jp))
+
+    sdkman = os.path.expanduser("~/.sdkman/candidates/java")
+    if os.path.isdir(sdkman):
+        for name in os.listdir(sdkman):
+            jp = _candidate_from_java_home(os.path.join(sdkman, name))
+            if jp:
+                cands.add(normalize_path(jp))
 
     return sorted(cands)
 

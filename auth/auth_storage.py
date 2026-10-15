@@ -69,6 +69,8 @@ def _default_mem_max_mb() -> int:
         return 4096
 
     total_gib = total_bytes / (1024 ** 3)
+    if platform.system() == "Darwin" and total_gib < 9:
+        return 4096
     if total_gib >= 8 and total_gib < 9:
         return 6144
     if total_gib > 8:
