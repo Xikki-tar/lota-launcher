@@ -4,6 +4,7 @@ import { win } from "../lib/tauri";
 import styles from "./TitleBar.module.css";
 
 const appWin = getCurrentWindow();
+const IS_MAC = navigator.userAgent.includes("Mac");
 
 interface Props {
   title?: string;
@@ -22,7 +23,7 @@ export default function TitleBar({ title = "Lota Launcher", version }: Props) {
   }, []);
 
   return (
-    <div className={styles.bar} data-tauri-drag-region>
+    <div className={`${styles.bar} ${IS_MAC ? styles.mac : ""}`} data-tauri-drag-region>
 
       <div className={styles.left} data-tauri-drag-region>
         <div className={styles.logoWrap}>
@@ -33,13 +34,15 @@ export default function TitleBar({ title = "Lota Launcher", version }: Props) {
         {version && <span className={styles.version} data-tauri-drag-region>{version}</span>}
       </div>
 
-      <div className={styles.controls}>
-        <button className={styles.btn} onClick={() => win.minimize()}>-</button>
-        <button className={styles.btn} onClick={() => win.toggleMaximize()}>
-          {maximized ? "o" : "[]"}
-        </button>
-        <button className={`${styles.btn} ${styles.close}`} onClick={() => win.close()}>X</button>
-      </div>
+      {!IS_MAC && (
+        <div className={styles.controls}>
+          <button className={styles.btn} onClick={() => win.minimize()}>-</button>
+          <button className={styles.btn} onClick={() => win.toggleMaximize()}>
+            {maximized ? "o" : "[]"}
+          </button>
+          <button className={`${styles.btn} ${styles.close}`} onClick={() => win.close()}>X</button>
+        </div>
+      )}
 
     </div>
   );

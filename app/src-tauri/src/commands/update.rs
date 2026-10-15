@@ -21,9 +21,29 @@ pub fn get_display_version(app: AppHandle) -> String {
     app.package_info().version.to_string()
 }
 
+#[cfg(target_os = "macos")]
+fn relaunch_command(path: &str) -> Command {
+    let bundle = std::path::Path::new(path)
+        .ancestors()
+        .find(|p| p.extension().is_some_and(|ext| ext == "app"));
+    match bundle {
+        Some(bundle) => {
+            let mut cmd = Command::new("/usr/bin/open");
+            cmd.arg("-n").arg(bundle);
+            cmd
+        }
+        None => Command::new(path),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn relaunch_command(path: &str) -> Command {
+    Command::new(path)
+}
+
 #[tauri::command]
 pub fn apply_update(app: AppHandle, path: String) -> Result<(), String> {
-    Command::new(&path).spawn().map_err(|e| e.to_string())?;
+    relaunch_command(&path).spawn().map_err(|e| e.to_string())?;
     crate::commands::backend::kill_backend();
     app.exit(0);
     Ok(())

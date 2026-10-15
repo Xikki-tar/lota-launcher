@@ -40,6 +40,12 @@
     ],
     "externalBin": [
       "binaries/backend"
-    ]
+    ],
+    "macOS": {
+      "minimumSystemVersion": "11.0",
+      "signingIdentity": "-",
+      "hardenedRuntime": true,
+      "entitlements": "Entitlements.plist"
+    }
   }
 }

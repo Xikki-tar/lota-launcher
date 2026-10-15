@@ -1,0 +1,19 @@
+{
+  "app": {
+    "windows": [
+      {
+        "label": "lota-launcher",
+        "title": "Lota Launcher",
+        "width": 1100,
+        "height": 700,
+        "minWidth": 900,
+        "minHeight": 600,
+        "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "resizable": true,
+        "center": true
+      }
+    ]
+  }
+}

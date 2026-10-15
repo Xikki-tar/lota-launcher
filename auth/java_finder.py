@@ -28,7 +28,7 @@ def get_java_version(java_path: str) -> str:
             [path, "-version"],
             capture_output=True,
             text=True,
-            timeout=3,
+            timeout=15,
             **windows_hidden_subprocess_kwargs(),
         )
         out = (p.stderr or p.stdout or "").strip()
@@ -139,18 +139,50 @@ def _find_linux() -> list[str]:
     return sorted(cands)
 
 
+MACOS_JAVA_STUB = "/usr/bin/java"
+
+
+def _java_bins_under(root: str, max_depth: int = 7) -> list[str]:
+    found: list[str] = []
+    if not os.path.isdir(root):
+        return found
+    exe = "java.exe" if platform.system() == "Windows" else "java"
+    base_depth = root.rstrip(os.sep).count(os.sep)
+    for dirpath, dirnames, _files in os.walk(root):
+        if os.path.basename(dirpath) == "bin":
+            candidate = os.path.join(dirpath, exe)
+            if is_executable(candidate) and os.path.basename(os.path.dirname(dirpath)) != "jre":
+                found.append(normalize_path(candidate))
+            dirnames[:] = []
+        elif dirpath.count(os.sep) - base_depth >= max_depth:
+            dirnames[:] = []
+    return found
+
+
+def _launcher_java_candidates() -> list[str]:
+    try:
+        from auth.auth_storage import get_data_dir
+        return _java_bins_under(str(get_data_dir() / "java"), max_depth=4)
+    except Exception:
+        return []
+
+
 def _find_macos() -> list[str]:
     cands = set()
 
     java = shutil.which("java")
-    if java:
+    if java and normalize_path(java) != MACOS_JAVA_STUB:
         cands.add(normalize_path(java))
 
+    jp = _candidate_from_java_home(os.environ.get("JAVA_HOME", ""))
+    if jp:
+        cands.add(normalize_path(jp))
+
     try:
-        p = subprocess.run(["/usr/libexec/java_home", "-V"], capture_output=True, text=True, timeout=3)
-        out = (p.stderr or p.stdout or "").strip()
+        p = subprocess.run(["/usr/libexec/java_home", "-V"], capture_output=True, text=True, timeout=10)
+        out = (p.stderr or "") + "\n" + (p.stdout or "")
         for line in out.splitlines():
-            m = re.search(r"(/Library/Java/JavaVirtualMachines/.*?/Contents/Home)$", line.strip())
+            m = re.search(r"\s(/\S.*/Contents/Home)$", line.rstrip())
             if m:
                 jp = _candidate_from_java_home(m.group(1))
                 if jp:
@@ -169,6 +201,37 @@ def _find_macos() -> list[str]:
                 jp = _candidate_from_java_home(home)
                 if jp:
                     cands.add(normalize_path(jp))
+
+    for prefix in ("/opt/homebrew/opt", "/usr/local/opt"):
+        if os.path.isdir(prefix):
+            for name in os.listdir(prefix):
+                if not name.startswith("openjdk"):
+                    continue
+                home = os.path.join(prefix, name, "libexec", "openjdk.jdk", "Contents", "Home")
+                jp = _candidate_from_java_home(home)
+                if jp:
+                    cands.add(normalize_path(jp))
+
+    sdkman = os.path.expanduser("~/.sdkman/candidates/java")
+    if os.path.isdir(sdkman):
+        for name in os.listdir(sdkman):
+            jp = _candidate_from_java_home(os.path.join(sdkman, name))
+            if jp:
+                cands.add(normalize_path(jp))
+
+    jp = _candidate_from_java_home("/Library/Internet Plug-Ins/JavaAppletPlugin.plugin/Contents/Home")
+    if jp:
+        cands.add(normalize_path(jp))
+
+    support = os.path.expanduser("~/Library/Application Support")
+    for root in (
+        os.path.expanduser("~/.asdf/installs/java"),
+        os.path.expanduser("~/.jenv/versions"),
+        os.path.join(support, "minecraft", "runtime"),
+        os.path.join(support, "PrismLauncher", "java"),
+        os.path.join(support, "curseforge", "minecraft", "Install", "runtime"),
+    ):
+        cands.update(_java_bins_under(root))
 
     return sorted(cands)
 
@@ -265,4 +328,5 @@ def find_java_candidates() -> list[str]:
         candidates = _find_macos()
     else:
         candidates = _find_linux()
+    candidates = list(dict.fromkeys(list(candidates) + _launcher_java_candidates()))
     return sorted(candidates, key=_java_candidate_sort_key)

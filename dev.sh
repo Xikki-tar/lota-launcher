@@ -5,8 +5,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PORT_FILE="$SCRIPT_DIR/.dev-port"
 
-export LOTA_API_BASE="${LOTA_API_BASE:-https://test.lota.work}"
-
 # Активируем venv если есть
 if [ -f "$SCRIPT_DIR/.venv/bin/activate" ]; then
   source "$SCRIPT_DIR/.venv/bin/activate"
@@ -17,8 +15,11 @@ fi
 # Чистим старый port-file
 rm -f "$PORT_FILE"
 
+PYTHON_BIN="python"
+command -v python >/dev/null 2>&1 || PYTHON_BIN="python3"
+
 echo "→ Запуск Python бэкенда..."
-python "$SCRIPT_DIR/backend.py" &
+"$PYTHON_BIN" "$SCRIPT_DIR/backend.py" &
 BACKEND_PID=$!
 
 # Ждём пока бэкенд напишет порт (до 10 сек)

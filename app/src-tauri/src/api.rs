@@ -6,10 +6,8 @@ use serde_json::Value;
 
 use crate::store;
 
-const DEFAULT_API_BASES: &str = match option_env!("LOTA_BUILD_API_BASES") {
-    Some(v) => v,
-    None => "https://ru.lota.work,https://eu.lota.work",
-};
+const DEFAULT_API_BASES: &str = "https://ru.lota.work, https://eu.lota.work";
+
 const PROBE_TIMEOUT_SECS: u64 = 3;
 const CACHE_TTL_SECS: u64 = 300;
 
@@ -58,7 +56,9 @@ fn candidates() -> Vec<String> {
         }
     }
 
-    split_into(&mut list, DEFAULT_API_BASES);
+    if list.is_empty() {
+        split_into(&mut list, DEFAULT_API_BASES);
+    }
 
     dedup(list)
 }
