@@ -6,7 +6,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 
 from auth.auth_storage import load_settings
-from auth.settings import API_BASE
 
 
 DEFAULT_PROBE_TIMEOUT = 2.5
@@ -15,6 +14,10 @@ DEFAULT_CACHE_TTL_SECONDS = 300.0
 _api_base_cache_lock = threading.Lock()
 _api_base_cache_value = ""
 _api_base_cache_until = 0.0
+
+
+class ApiNotConfigured(RuntimeError):
+    pass
 
 
 def _split_candidates(raw: str) -> list[str]:
@@ -52,9 +55,6 @@ def get_api_candidates() -> list[str]:
         if single:
             candidates.extend(_split_candidates(single))
 
-    if API_BASE:
-        candidates.extend(_split_candidates(API_BASE))
-
     seen: set[str] = set()
     normalized: list[str] = []
     for candidate in candidates:
@@ -91,8 +91,8 @@ def resolve_fastest_api_base(*, force_refresh: bool = False, timeout: float = DE
 
     candidates = get_api_candidates()
     if not candidates:
-        print("[api] no API base candidates configured", flush=True)
-        raise RuntimeError("No API base candidates configured")
+        print("[api] no API addresses configured: set api_base_urls in [client] of config.cfg", flush=True)
+        raise ApiNotConfigured("no_api_config")
     if len(candidates) == 1:
         winner = candidates[0]
         with _api_base_cache_lock:

@@ -11,10 +11,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter};
 
-const API_BASES: &str = match option_env!("LOTA_BUILD_API_BASES") {
-    Some(v) => v,
-    None => "https://ru.lota.work,https://eu.lota.work",
-};
 const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
 const SKIP_UPDATER_ARG: &str = "--skip-updater";
@@ -62,6 +58,69 @@ fn exe_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+fn split_bases(raw: &str, out: &mut Vec<String>) {
+    for part in raw.replace(';', ",").split(',') {
+        let base = part.trim().trim_end_matches('/');
+        if !base.is_empty() && !out.iter().any(|b| b.eq_ignore_ascii_case(base)) {
+            out.push(base.to_string());
+        }
+    }
+}
+
+fn config_api_bases(path: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return out;
+    };
+    let mut in_client = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') && line.ends_with(']') {
+            in_client = line[1..line.len() - 1].trim().eq_ignore_ascii_case("client");
+            continue;
+        }
+        if !in_client {
+            continue;
+        }
+        if let Some((key, value)) = line.split_once('=') {
+            let key = key.trim().to_ascii_lowercase();
+            if key == "api_base_urls" || key == "api_base_url" {
+                split_bases(value, &mut out);
+            }
+        }
+    }
+    out
+}
+
+fn api_bases(dir: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    for key in ["LOTA_API_BASES", "LOTA_API_BASE"] {
+        if let Ok(v) = std::env::var(key) {
+            split_bases(&v, &mut out);
+        }
+    }
+    if !out.is_empty() {
+        return out;
+    }
+    let mut config_dirs = Vec::new();
+    if let Ok(home) = std::env::var("LOTA_LAUNCHER_HOME") {
+        if !home.trim().is_empty() {
+            config_dirs.push(PathBuf::from(home.trim()));
+        }
+    }
+    config_dirs.push(dir.to_path_buf());
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        config_dirs.push(PathBuf::from(local).join("lota-launcher"));
+    }
+    for config_dir in config_dirs {
+        let bases = config_api_bases(&config_dir.join("config.cfg"));
+        if !bases.is_empty() {
+            return bases;
+        }
+    }
+    out
+}
+
 fn read_local_version(dir: &Path) -> String {
     std::fs::read_to_string(dir.join(VERSION_FILE))
         .ok()
@@ -98,11 +157,11 @@ fn version_newer(remote: &str, local: &str) -> bool {
     r > l
 }
 
-async fn fetch_runtime_manifest() -> Option<(String, RuntimeCheckResponse)> {
+async fn fetch_runtime_manifest(dir: &Path) -> Option<(String, RuntimeCheckResponse)> {
     let client = reqwest::Client::builder().timeout(CHECK_TIMEOUT).build().ok()?;
     let payload = serde_json::json!({ "platform": PLATFORM, "channel": CHANNEL });
 
-    for base in API_BASES.split(',').map(str::trim).filter(|b| !b.is_empty()) {
+    for base in api_bases(dir) {
         let url = format!("{base}/api/runtime/check");
         let Ok(resp) = client.post(&url).json(&payload).send().await else {
             continue;
@@ -205,7 +264,7 @@ async fn run_update_flow(app: AppHandle) {
     let local_version = read_local_version(&dir);
     emit_status(&app, "Проверяю обновления...");
 
-    let Some((base, manifest)) = fetch_runtime_manifest().await else {
+    let Some((base, manifest)) = fetch_runtime_manifest(&dir).await else {
         launch_launcher_and_exit(&app, &dir).await;
         return;
     };
@@ -270,4 +329,26 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("error while running updater");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_api_bases_from_client_section() {
+        let dir = std::env::temp_dir().join(format!("lota-updater-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("config.cfg");
+        std::fs::write(
+            &path,
+            "[auth]\napi_base_urls = https://wrong.example\n\n[client]\nlanguage = Русский\napi_base_urls = https://a.example/, https://b.example;https://A.example\n",
+        )
+        .unwrap();
+        assert_eq!(config_api_bases(&path), vec!["https://a.example", "https://b.example"]);
+        std::fs::write(&path, "[client]\nlanguage = Русский\n").unwrap();
+        assert!(config_api_bases(&path).is_empty());
+        assert!(config_api_bases(&dir.join("missing.cfg")).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
