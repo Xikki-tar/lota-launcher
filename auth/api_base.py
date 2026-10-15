@@ -5,7 +5,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
-from auth.auth_storage import load_settings
+from auth.auth_storage import load_settings, save_settings
+from auth.settings import DEFAULT_API_BASES
 
 
 DEFAULT_PROBE_TIMEOUT = 2.5
@@ -14,10 +15,6 @@ DEFAULT_CACHE_TTL_SECONDS = 300.0
 _api_base_cache_lock = threading.Lock()
 _api_base_cache_value = ""
 _api_base_cache_until = 0.0
-
-
-class ApiNotConfigured(RuntimeError):
-    pass
 
 
 def _split_candidates(raw: str) -> list[str]:
@@ -55,6 +52,9 @@ def get_api_candidates() -> list[str]:
         if single:
             candidates.extend(_split_candidates(single))
 
+    if not candidates:
+        candidates = _split_candidates(DEFAULT_API_BASES)
+
     seen: set[str] = set()
     normalized: list[str] = []
     for candidate in candidates:
@@ -64,6 +64,18 @@ def get_api_candidates() -> list[str]:
         seen.add(key)
         normalized.append(candidate)
     return normalized
+
+
+def ensure_default_api_bases() -> None:
+    settings = load_settings()
+    if isinstance(settings, dict) and (
+        str(settings.get("api_base_urls") or "").strip() or str(settings.get("api_base_url") or "").strip()
+    ):
+        return
+    try:
+        save_settings({"api_base_urls": DEFAULT_API_BASES})
+    except Exception as exc:
+        print(f"[api] failed to write default api_base_urls: {type(exc).__name__}: {exc}", flush=True)
 
 
 def _probe_candidate(base_url: str, timeout: float) -> tuple[str, float]:
@@ -90,9 +102,6 @@ def resolve_fastest_api_base(*, force_refresh: bool = False, timeout: float = DE
             return _api_base_cache_value
 
     candidates = get_api_candidates()
-    if not candidates:
-        print("[api] no API addresses configured: set api_base_urls in [client] of config.cfg", flush=True)
-        raise ApiNotConfigured("no_api_config")
     if len(candidates) == 1:
         winner = candidates[0]
         with _api_base_cache_lock:

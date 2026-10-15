@@ -5,5 +5,7 @@ try:
 except ImportError:
     UPDATES_DISABLED = False
 
+DEFAULT_API_BASES = "https://ru.lota.work, https://eu.lota.work"
+
 PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
 DEFAULT_STEVE = os.path.join(PROJECT_ROOT, "assets/steve.png")

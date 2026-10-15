@@ -56,7 +56,7 @@ from auth.auth_storage import (
     load_skin_model,
     save_skin_model,
 )
-from auth.api_base import ApiNotConfigured, get_api_base
+from auth.api_base import ensure_default_api_bases, get_api_base
 from services.library_service import LibraryService
 from window.i18n import set_language, t
 
@@ -140,6 +140,7 @@ def _open_launcher_log():
 
 _log_file = _open_launcher_log()
 _prune_launcher_logs()
+ensure_default_api_bases()
 
 
 def _log_append(line: str, persist: bool = True) -> None:
@@ -616,8 +617,6 @@ def java_scan():
 def _proxy_post(path: str, body: dict) -> tuple[dict, int]:
     try:
         base = get_api_base()
-    except ApiNotConfigured:
-        return {"ok": False, "error": "no_api_config"}, 0
     except Exception as e:
         print(f"[backend] proxy POST {path} failed: no api base resolved: {type(e).__name__}: {e}", flush=True)
         return {"ok": False, "error": "conn_refused", "detail": str(e)}, 0
@@ -632,8 +631,6 @@ def _proxy_post(path: str, body: dict) -> tuple[dict, int]:
 def _proxy_get(path: str, params: dict) -> tuple[dict, int]:
     try:
         base = get_api_base()
-    except ApiNotConfigured:
-        return {"ok": False, "error": "no_api_config"}, 0
     except Exception as e:
         print(f"[backend] proxy GET {path} failed: no api base resolved: {type(e).__name__}: {e}", flush=True)
         return {"ok": False, "error": "conn_refused", "detail": str(e)}, 0
@@ -656,13 +653,6 @@ def debug_logs():
         start = max(since, first)
         lines = list(itertools.islice(_log_lines, start - first, None)) if start < total else []
     return jsonify({"lines": lines, "total": total})
-
-
-@app.get("/api-config")
-def api_config_status():
-    from auth.api_base import get_api_candidates
-    from auth.auth_storage import get_settings_cfg
-    return jsonify({"configured": bool(get_api_candidates()), "config_path": str(get_settings_cfg())})
 
 
 @app.get("/debug/connection")

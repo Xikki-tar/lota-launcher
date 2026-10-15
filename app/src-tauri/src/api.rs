@@ -6,6 +6,8 @@ use serde_json::Value;
 
 use crate::store;
 
+const DEFAULT_API_BASES: &str = "https://ru.lota.work, https://eu.lota.work";
+
 const PROBE_TIMEOUT_SECS: u64 = 3;
 const CACHE_TTL_SECS: u64 = 300;
 
@@ -54,6 +56,10 @@ fn candidates() -> Vec<String> {
         }
     }
 
+    if list.is_empty() {
+        split_into(&mut list, DEFAULT_API_BASES);
+    }
+
     dedup(list)
 }
 
@@ -84,7 +90,7 @@ pub async fn resolve() -> Result<String, String> {
 
     let list = candidates();
     if list.is_empty() {
-        return Err("no_api_config".into());
+        return Err("no_api_candidates".into());
     }
 
     let client = Client::new();

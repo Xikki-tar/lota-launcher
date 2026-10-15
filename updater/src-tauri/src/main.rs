@@ -13,6 +13,7 @@ use tauri::{AppHandle, Emitter};
 
 const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
+const DEFAULT_API_BASES: &str = "https://ru.lota.work, https://eu.lota.work";
 const SKIP_UPDATER_ARG: &str = "--skip-updater";
 const LAUNCHER_EXE: &str = "lota-launcher.exe";
 const BACKEND_EXE: &str = "backend.exe";
@@ -118,6 +119,7 @@ fn api_bases(dir: &Path) -> Vec<String> {
             return bases;
         }
     }
+    split_bases(DEFAULT_API_BASES, &mut out);
     out
 }
 

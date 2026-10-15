@@ -77,29 +77,6 @@ body {
   letter-spacing: 0.5px;
 }
 
-.apiConfigError {
-  max-width: 460px;
-  padding: 0 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  text-align: center;
-  line-height: 1.5;
-  word-break: break-word;
-}
-
-.apiConfigErrorTitle {
-  color: var(--text);
-  font-size: 16px;
-  font-weight: 600;
-}
-
-.apiConfigErrorRetry {
-  align-self: center;
-  padding: 8px 20px;
-  cursor: pointer;
-}
-
 .innerLayout {
   display: flex;
   flex: 1;

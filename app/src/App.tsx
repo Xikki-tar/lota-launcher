@@ -13,13 +13,12 @@ import Friends from "./pages/Friends";
 import ErrorBoundary from "./components/ErrorBoundary";
 import UpdateDialog from "./components/UpdateDialog";
 import LoadingDots from "./components/LoadingDots";
-import ApiNotConfigured from "./components/ApiNotConfigured";
 import { BackendProvider } from "./lib/BackendContext";
 import { I18nProvider } from "./lib/I18nContext";
 import { checkForUpdate, isInAppUpdateMode, type UpdateCheckResult } from "./lib/update";
 import "./App.css";
 
-type AppState = "loading" | "login" | "main" | "no_api";
+type AppState = "loading" | "login" | "main";
 
 async function resolvePort(): Promise<number> {
   // дев: порт из env, продакшн: tauri стартует питон и отдаёт порт
@@ -34,7 +33,6 @@ export default function App() {
   const [backendPort, setBackendPort] = useState<number | null>(null);
   const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
   const [displayVersion, setDisplayVersion] = useState("");
-  const [configPath, setConfigPath] = useState("");
 
   useEffect(() => {
     initApp();
@@ -58,12 +56,6 @@ export default function App() {
       const port = await resolvePort();
       console.log("[App] port resolved:", port);
       setBackendPort(port);
-      const apiConfig = await fetch(`http://127.0.0.1:${port}/api-config`).then(r => r.json());
-      if (!apiConfig?.configured) {
-        setConfigPath(String(apiConfig?.config_path ?? "config.cfg"));
-        setState("no_api");
-        return;
-      }
       const auth = await fetch(`http://127.0.0.1:${port}/auth/load`).then(r => r.json());
       console.log("[App] auth/load →", JSON.stringify(auth));
       setState(auth?.token ? "main" : "login");
@@ -79,19 +71,6 @@ export default function App() {
         <TitleBar version={displayVersion ? `v${displayVersion}` : undefined} />
         <div className="splash"><LoadingDots label="Загрузка" /></div>
       </div>
-    );
-  }
-
-  if (state === "no_api") {
-    return (
-      <BackendProvider value={backendPort}>
-        <I18nProvider>
-          <div className="app">
-            <TitleBar version={displayVersion ? `v${displayVersion}` : undefined} />
-            <ApiNotConfigured configPath={configPath} onRetry={() => { setState("loading"); initApp(); }} />
-          </div>
-        </I18nProvider>
-      </BackendProvider>
     );
   }
 
