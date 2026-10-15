@@ -142,6 +142,31 @@ def _find_linux() -> list[str]:
 MACOS_JAVA_STUB = "/usr/bin/java"
 
 
+def _java_bins_under(root: str, max_depth: int = 7) -> list[str]:
+    found: list[str] = []
+    if not os.path.isdir(root):
+        return found
+    exe = "java.exe" if platform.system() == "Windows" else "java"
+    base_depth = root.rstrip(os.sep).count(os.sep)
+    for dirpath, dirnames, _files in os.walk(root):
+        if os.path.basename(dirpath) == "bin":
+            candidate = os.path.join(dirpath, exe)
+            if is_executable(candidate) and os.path.basename(os.path.dirname(dirpath)) != "jre":
+                found.append(normalize_path(candidate))
+            dirnames[:] = []
+        elif dirpath.count(os.sep) - base_depth >= max_depth:
+            dirnames[:] = []
+    return found
+
+
+def _launcher_java_candidates() -> list[str]:
+    try:
+        from auth.auth_storage import get_data_dir
+        return _java_bins_under(str(get_data_dir() / "java"), max_depth=4)
+    except Exception:
+        return []
+
+
 def _find_macos() -> list[str]:
     cands = set()
 
@@ -193,6 +218,20 @@ def _find_macos() -> list[str]:
             jp = _candidate_from_java_home(os.path.join(sdkman, name))
             if jp:
                 cands.add(normalize_path(jp))
+
+    jp = _candidate_from_java_home("/Library/Internet Plug-Ins/JavaAppletPlugin.plugin/Contents/Home")
+    if jp:
+        cands.add(normalize_path(jp))
+
+    support = os.path.expanduser("~/Library/Application Support")
+    for root in (
+        os.path.expanduser("~/.asdf/installs/java"),
+        os.path.expanduser("~/.jenv/versions"),
+        os.path.join(support, "minecraft", "runtime"),
+        os.path.join(support, "PrismLauncher", "java"),
+        os.path.join(support, "curseforge", "minecraft", "Install", "runtime"),
+    ):
+        cands.update(_java_bins_under(root))
 
     return sorted(cands)
 
@@ -289,4 +328,5 @@ def find_java_candidates() -> list[str]:
         candidates = _find_macos()
     else:
         candidates = _find_linux()
+    candidates = list(dict.fromkeys(list(candidates) + _launcher_java_candidates()))
     return sorted(candidates, key=_java_candidate_sort_key)

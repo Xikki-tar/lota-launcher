@@ -609,6 +609,7 @@ def java_scan():
     for path in candidates:
         major = get_java_major_version(path)
         result.append({"path": path, "major": major})
+    print(f"[java] scan found {len(result)}: " + (", ".join(f"{c['path']} (Java {c['major']})" for c in result) or "nothing"), flush=True)
     return jsonify({"candidates": result})
 
 
