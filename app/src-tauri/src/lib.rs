@@ -103,6 +103,7 @@ pub fn run() {
             commands::auth::api_register_complete,
             commands::backend::backend_start,
             commands::backend::backend_port,
+            commands::backend::backend_key,
             commands::update::apply_update,
             commands::update::restart_to_updater,
             commands::update::get_display_version,

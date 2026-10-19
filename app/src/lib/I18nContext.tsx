@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from "react";
-import { useBackend } from "./BackendContext";
+import { useBackend, backendHeaders } from "./BackendContext";
 
 type Strings = Record<string, string>;
 
@@ -23,7 +23,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   const load = useCallback(async () => {
     if (!port) return;
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/i18n`);
+      const res = await fetch(`http://127.0.0.1:${port}/i18n`, { headers: backendHeaders() });
       const data = await res.json();
       setStrings(data.strings ?? {});
       setLanguage(data.language ?? "Русский");

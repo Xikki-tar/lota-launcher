@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useBackend, apiGet, apiPost, apiDelete, invalidateCache } from "../lib/BackendContext";
+import { useBackend, apiGet, apiPost, apiDelete, invalidateCache, backendUrl } from "../lib/BackendContext";
 import { useI18n } from "../lib/I18nContext";
 import { type Localized, langCode, loc } from "../lib/localized";
 import { trackTask, isTracking, useProgress } from "../lib/progressStore";
@@ -232,7 +232,7 @@ function InfoCard({ build, port }: { build: Build; port: number | null }) {
   const { language } = useI18n();
   const description = loc(build.description, langCode(language));
   const imgSrc = build.image && port
-    ? `http://127.0.0.1:${port}/library/image?path=${encodeURIComponent(build.image)}`
+    ? backendUrl(port, `/library/image?path=${encodeURIComponent(build.image)}`)
     : null;
 
   return (

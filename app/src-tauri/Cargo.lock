@@ -2032,6 +2032,7 @@ name = "lota-launcher"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "getrandom 0.2.17",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

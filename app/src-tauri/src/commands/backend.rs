@@ -7,12 +7,29 @@ use tauri_plugin_shell::ShellExt;
 struct BackendState {
     port: Option<u16>,
     child: Option<CommandChild>,
+    key: String,
 }
 
 static BACKEND: Mutex<BackendState> = Mutex::new(BackendState {
     port: None,
     child: None,
+    key: String::new(),
 });
+
+fn ensure_key() -> String {
+    let mut state = BACKEND.lock().unwrap();
+    if state.key.is_empty() {
+        let mut bytes = [0u8; 32];
+        getrandom::getrandom(&mut bytes).expect("no system randomness");
+        state.key = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    }
+    state.key.clone()
+}
+
+#[tauri::command]
+pub fn backend_key() -> String {
+    ensure_key()
+}
 
 #[tauri::command]
 pub async fn backend_start(app: AppHandle) -> Result<u16, String> {
@@ -21,11 +38,13 @@ pub async fn backend_start(app: AppHandle) -> Result<u16, String> {
     }
 
     let data_dir = crate::store::get_config_dir();
+    let key = ensure_key();
     let (mut rx, child) = app
         .shell()
         .sidecar("backend")
         .map_err(|e| e.to_string())?
         .env("LOTA_LAUNCHER_HOME", data_dir.to_string_lossy().to_string())
+        .env("LOTA_BACKEND_KEY", &key)
         .spawn()
         .map_err(|e| format!("Failed to start backend: {}", e))?;
 
@@ -39,7 +58,7 @@ pub async fn backend_start(app: AppHandle) -> Result<u16, String> {
         }
     }
     let port = port.ok_or("Bad port line")?;
-    wait_for_backend_ready(port).await;
+    wait_for_backend_ready(port, &key).await;
 
     let mut state = BACKEND.lock().unwrap();
     state.port = Some(port);
@@ -48,13 +67,14 @@ pub async fn backend_start(app: AppHandle) -> Result<u16, String> {
     Ok(port)
 }
 
-async fn wait_for_backend_ready(port: u16) {
+async fn wait_for_backend_ready(port: u16, key: &str) {
     let client = reqwest::Client::new();
     let url = format!("http://127.0.0.1:{}/settings", port);
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
         let ok = client
             .get(&url)
+            .header("X-Lota-Key", key)
             .timeout(Duration::from_secs(1))
             .send()
             .await
@@ -80,11 +100,15 @@ pub fn kill_backend() {
 }
 
 pub async fn has_active_downloads() -> bool {
-    let port = BACKEND.lock().unwrap().port;
+    let (port, key) = {
+        let state = BACKEND.lock().unwrap();
+        (state.port, state.key.clone())
+    };
     let Some(port) = port else { return false };
     let url = format!("http://127.0.0.1:{}/tasks/active_downloads", port);
     let resp = reqwest::Client::new()
         .get(&url)
+        .header("X-Lota-Key", key)
         .timeout(Duration::from_secs(3))
         .send()
         .await;

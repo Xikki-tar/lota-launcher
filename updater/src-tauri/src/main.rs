@@ -196,6 +196,9 @@ async fn download_artifact(
     } else {
         format!("{base}{}", artifact.url)
     };
+    if !url.starts_with("https://") {
+        return Err("insecure update url".to_string());
+    }
     let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));

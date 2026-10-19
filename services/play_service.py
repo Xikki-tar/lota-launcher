@@ -19,7 +19,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from auth.api_base import get_api_base
 from auth.auth_storage import get_data_dir, load_auth_data, load_settings, save_settings
-from auth.java_finder import find_java_candidates, get_java_major_version, get_java_version
+from auth.java_finder import JAVA_EXECUTABLE_NAMES, find_java_candidates, get_java_major_version, get_java_version, is_safe_java_path
 from minecraft.mc_client import ensure_forge_version, prepare_version, report_download_bytes
 from minecraft.mc_launch import build_launch_spec
 from services.build_sync import (
@@ -150,7 +150,9 @@ SYSTEM_OPENAL_CANDIDATES = (
 
 def resolve_custom_java(java_path: str) -> str:
     java_path = str(java_path or "").strip()
-    if not java_path or not _is_executable(java_path):
+    if java_path.lower() in JAVA_EXECUTABLE_NAMES:
+        java_path = shutil.which(java_path) or ""
+    if not java_path or not is_safe_java_path(java_path):
         raise RuntimeError(t("play_error_java"))
     major = get_java_major_version(java_path)
     if major is not None and major < MIN_JAVA_MAJOR:
@@ -669,19 +671,22 @@ class PlayService:
         auth = load_auth_data() or {}
         token = str(auth.get("token") or "").strip()
         if not token:
+            print("[bundle] key request skipped: no token", flush=True)
             return None
         try:
+            base = get_api_base()
             response = requests.post(
-                f"{get_api_base()}/api/bundle/key",
+                f"{base}/api/bundle/key",
                 json={"token": token, "build_id": build_id},
                 timeout=10,
             )
-        except Exception:
-            return None
-        if response.status_code != 200:
+        except Exception as exc:
+            print(f"[bundle] key request failed: {type(exc).__name__}: {exc}", flush=True)
             return None
         data = response.json() if response.headers.get("Content-Type", "").startswith("application/json") else None
-        if not isinstance(data, dict) or not data.get("ok"):
+        if response.status_code != 200 or not isinstance(data, dict) or not data.get("ok"):
+            reason = data.get("error") if isinstance(data, dict) else (response.text or "")[:200]
+            print(f"[bundle] key request rejected by {base}: HTTP {response.status_code}, build {build_id}: {reason}", flush=True)
             return None
         try:
             return base64.b64decode(data.get("key") or "")

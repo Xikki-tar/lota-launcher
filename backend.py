@@ -2,6 +2,8 @@ import sys
 import io
 import json
 import hashlib
+import hmac
+import secrets
 import os
 import platform
 import socket
@@ -66,18 +68,48 @@ app = Flask(__name__)
 app.config["JSON_SORT_KEYS"] = False
 
 
+_BACKEND_KEY = os.getenv("LOTA_BACKEND_KEY", "").strip() or secrets.token_hex(32)
+_ALLOWED_ORIGINS = {
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "http://localhost:1420",
+    "http://127.0.0.1:1420",
+}
+_ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
+
+
+def _safe_child(base: Path, rel: str) -> Path | None:
+    try:
+        root = base.resolve()
+        target = (root / rel).resolve()
+    except (OSError, ValueError):
+        return None
+    if target != root and root in target.parents:
+        return target
+    return None
+
+
 @app.after_request
 def _cors(response):
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    origin = request.headers.get("Origin", "")
+    if origin in _ALLOWED_ORIGINS:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Lota-Key"
+        response.headers["Vary"] = "Origin"
     return response
 
 
 @app.before_request
-def _preflight():
+def _guard():
+    if request.host.rsplit(":", 1)[0].strip("[]").lower() not in _ALLOWED_HOSTS:
+        return Response(status=403)
     if request.method == "OPTIONS":
         return Response(status=200)
+    supplied = request.headers.get("X-Lota-Key") or request.args.get("key") or ""
+    if not hmac.compare_digest(supplied.encode(), _BACKEND_KEY.encode()):
+        return jsonify({"ok": False, "error": "unauthorized"}), 403
 
 
 _ACTION_LOG_SKIP = ("/play/state", "/debug/logs", "/tasks/active_downloads", "/task/")
@@ -142,6 +174,78 @@ _log_file = _open_launcher_log()
 _prune_launcher_logs()
 ensure_default_api_bases()
 
+_HTTP_SECRET_KEYS = {"token", "code", "key", "download_token", "link_token", "access_token", "password"}
+_HTTP_QUIET_PATHS = ("/api/build/unit",)
+_HTTP_BODY_LIMIT = 400
+
+
+def _redact(value):
+    if isinstance(value, dict):
+        return {k: ("***" if str(k).lower() in _HTTP_SECRET_KEYS else _redact(v)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact(v) for v in value]
+    return value
+
+
+def _short(value) -> str:
+    text = json.dumps(value, ensure_ascii=False, default=str) if not isinstance(value, str) else value
+    return text if len(text) <= _HTTP_BODY_LIMIT else text[:_HTTP_BODY_LIMIT] + "..."
+
+
+def _install_http_logging() -> None:
+    from urllib.parse import urlsplit
+    import requests.sessions
+
+    original = requests.sessions.Session.request
+    if getattr(original, "_lota_logged", False):
+        return
+
+    def logged_request(self, method, url, *args, **kwargs):
+        path = urlsplit(str(url)).path
+        if not path.startswith("/api/"):
+            return original(self, method, url, *args, **kwargs)
+        quiet = path.startswith(_HTTP_QUIET_PATHS)
+        sent = []
+        if kwargs.get("params"):
+            sent.append(f"params={_short(_redact(dict(kwargs['params'])))}")
+        if kwargs.get("json") is not None:
+            sent.append(f"json={_short(_redact(kwargs['json']))}")
+        elif isinstance(kwargs.get("data"), dict):
+            sent.append(f"data={_short(_redact(kwargs['data']))}")
+        if kwargs.get("files"):
+            sent.append(f"files={list(kwargs['files'])}")
+        target = f"{method.upper()} {urlsplit(str(url)).scheme}://{urlsplit(str(url)).netloc}{path}"
+        started = time.monotonic()
+        try:
+            response = original(self, method, url, *args, **kwargs)
+        except Exception as exc:
+            print(f"[http] {target} {' '.join(sent)} -> FAILED after {time.monotonic() - started:.2f}s: {type(exc).__name__}: {exc}", flush=True)
+            raise
+        elapsed = time.monotonic() - started
+        if quiet and response.status_code == 200:
+            return response
+        body = ""
+        content_type = response.headers.get("Content-Type", "")
+        if kwargs.get("stream"):
+            body = f"<stream {response.headers.get('Content-Length', '?')} bytes>"
+        elif content_type.startswith("application/json"):
+            try:
+                body = _short(_redact(response.json()))
+            except ValueError:
+                body = _short(response.text)
+        elif response.status_code != 200:
+            body = _short(response.text or "")
+        else:
+            body = f"<{content_type or 'binary'} {len(response.content)} bytes>"
+        print(f"[http] {target} {' '.join(sent)} -> {response.status_code} in {elapsed:.2f}s: {body}", flush=True)
+        return response
+
+    logged_request._lota_logged = True
+    requests.sessions.Session.request = logged_request
+
+
+_install_http_logging()
+
 
 def _log_append(line: str, persist: bool = True) -> None:
     global _log_total
@@ -195,12 +299,13 @@ class _WerkzeugFilter(_logging.Filter):
         return not any(s in msg for s in self._SKIP)
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_QUERY_SECRET_RE = re.compile(r"\b(token|link_token|download_token|access_token|code|key)=[^&\s\"]+")
 
 
 class _ConsoleLogHandler(_logging.Handler):
     def emit(self, record: _logging.LogRecord) -> None:
         try:
-            text = _ANSI_RE.sub("", self.format(record))
+            text = _QUERY_SECRET_RE.sub(r"\1=***", _ANSI_RE.sub("", self.format(record)))
         except Exception:
             return
         if record.levelno >= _logging.ERROR:
@@ -456,6 +561,23 @@ def _install_macos_app_update(zip_path: Path, target_app: Path) -> str:
         shutil.rmtree(extract_dir, ignore_errors=True)
 
 
+_UPDATE_HOSTS = {"github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"}
+
+
+def _trusted_update_url(url: str) -> bool:
+    from urllib.parse import urlsplit
+    from auth.api_base import get_api_candidates
+    parts = urlsplit(url)
+    if parts.scheme != "https" or not parts.hostname:
+        return False
+    hosts = set(_UPDATE_HOSTS)
+    for base in get_api_candidates():
+        host = urlsplit(base).hostname
+        if host:
+            hosts.add(host.lower())
+    return parts.hostname.lower() in hosts
+
+
 @app.post("/update/install")
 def update_install():
     mode = _update_mode()
@@ -472,6 +594,8 @@ def update_install():
         return jsonify({"ok": False, "error": "missing_url"}), 400
     if url.startswith("/"):
         url = f"{get_api_base()}{url}"
+    if not _trusted_update_url(url):
+        return jsonify({"ok": False, "error": "untrusted_url"}), 400
 
     target_path = _appimage_path() if mode == "appimage" else _macos_app_bundle_path()
     task_id = _new_task()
@@ -572,11 +696,17 @@ def settings_load():
     return jsonify(load_settings())
 
 
+_EDITABLE_SETTINGS = {
+    "language", "java_path", "mem_min_mb", "mem_max_mb", "jvm_args",
+    "auto_java_version", "disable_openal", "debug_mode",
+}
+
+
 @app.post("/settings")
 def settings_save():
     body = request.json or {}
     settings = load_settings()
-    settings.update(body)
+    settings.update({k: v for k, v in body.items() if k in _EDITABLE_SETTINGS})
     save_settings(settings)
     set_language(str(settings.get("language") or ""))
     return jsonify({"ok": True})
@@ -594,9 +724,12 @@ def i18n():
 @app.get("/java/version")
 def java_version():
     import shutil
-    from auth.java_finder import get_java_major_version, is_executable
+    from auth.java_finder import JAVA_EXECUTABLE_NAMES, get_java_major_version, is_safe_java_path
     path = str(request.args.get("path") or "").strip()
-    resolved = path if path and is_executable(path) else (shutil.which(path) if path else None)
+    if path.lower() in JAVA_EXECUTABLE_NAMES:
+        resolved = shutil.which(path)
+    else:
+        resolved = path if is_safe_java_path(path) else None
     if not resolved:
         return jsonify({"path": path, "major": None, "found": False})
     return jsonify({"path": path, "major": get_java_major_version(resolved), "found": True})
@@ -893,13 +1026,11 @@ def library_image():
     path = request.args.get("path", "").strip()
     if not path:
         return Response(status=400)
-    p = Path(path)
-    if p.is_absolute() and p.is_file():
-        return send_file(str(p))
     lib = _lib()
-    resolved = (lib.paths.cache_dir / path).resolve()
-    if resolved.is_file():
-        return send_file(str(resolved))
+    for base in (lib.paths.cache_dir, lib.local_asset_dir()):
+        resolved = _safe_child(base, path)
+        if resolved is not None and resolved.is_file():
+            return send_file(str(resolved))
     return Response(status=404)
 
 
@@ -1379,8 +1510,10 @@ def news_image():
     if not rel_path:
         return Response(status=400)
     trimmed = rel_path[len("images/"):] if rel_path.startswith("images/") else rel_path
-    cache_path = get_data_dir() / "news_cache" / "images" / trimmed
-    if cache_path.exists():
+    cache_path = _safe_child(get_data_dir() / "news_cache" / "images", trimmed)
+    if cache_path is None:
+        return Response(status=400)
+    if cache_path.is_file():
         return send_file(str(cache_path))
     try:
         auth = load_auth_data() or {}

@@ -5,6 +5,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PORT_FILE="$SCRIPT_DIR/.dev-port"
 
+export LOTA_BACKEND_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+
 # Активируем venv если есть
 if [ -f "$SCRIPT_DIR/.venv/bin/activate" ]; then
   source "$SCRIPT_DIR/.venv/bin/activate"
@@ -47,4 +49,4 @@ trap cleanup EXIT INT TERM
 
 echo "→ Запуск Tauri..."
 cd "$SCRIPT_DIR/app"
-VITE_BACKEND_PORT="$PORT" WEBKIT_DISABLE_DMABUF_RENDERER=1 npm run tauri dev
+VITE_BACKEND_PORT="$PORT" VITE_BACKEND_KEY="$LOTA_BACKEND_KEY" WEBKIT_DISABLE_DMABUF_RENDERER=1 npm run tauri dev

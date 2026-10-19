@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useBackend, apiGet } from "../lib/BackendContext";
+import { useBackend, apiGet, backendUrl } from "../lib/BackendContext";
 import { useI18n } from "../lib/I18nContext";
 import { type Localized, langCode, loc } from "../lib/localized";
 import LoadingDots from "../components/LoadingDots";
@@ -7,7 +7,7 @@ import styles from "./Home.module.css";
 
 function newsImageUrl(port: number | null, path: string | undefined): string | null {
   if (!path || !port) return null;
-  return `http://127.0.0.1:${port}/news/image?path=${encodeURIComponent(path)}`;
+  return backendUrl(port, `/news/image?path=${encodeURIComponent(path)}`);
 }
 
 interface NewsItem {

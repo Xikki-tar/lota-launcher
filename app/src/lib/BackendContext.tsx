@@ -8,6 +8,21 @@ export function useBackend() {
   return useContext(BackendContext);
 }
 
+let _backendKey = "";
+
+export function setBackendKey(key: string) {
+  _backendKey = key;
+}
+
+export function backendHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  return { ...extra, "X-Lota-Key": _backendKey };
+}
+
+export function backendUrl(port: number | null, path: string): string {
+  const sep = path.includes("?") ? "&" : "?";
+  return `http://127.0.0.1:${port}${path}${sep}key=${encodeURIComponent(_backendKey)}`;
+}
+
 // кеш чтобы при переходе между страницами не долбить бек снова
 interface CacheEntry { data: unknown; ts: number; }
 const _cache = new Map<string, CacheEntry>();
@@ -32,7 +47,7 @@ export async function apiGet<T = unknown>(port: number | null, path: string, ttl
     if (hit && Date.now() - hit.ts < ttlMs) return hit.data as T;
   }
 
-  const r = await fetch(`http://127.0.0.1:${port}${path}`);
+  const r = await fetch(`http://127.0.0.1:${port}${path}`, { headers: backendHeaders() });
   const data = await r.json() as T;
 
   if (ttlMs > 0) _cache.set(`${port}${path}`, { data, ts: Date.now() });
@@ -44,7 +59,7 @@ export async function apiPost<T = unknown>(port: number | null, path: string, bo
   if (!port) throw new Error("Backend not ready");
   const r = await fetch(`http://127.0.0.1:${port}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: backendHeaders({ "Content-Type": "application/json" }),
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   return r.json();
@@ -54,7 +69,7 @@ export async function apiDelete<T = unknown>(port: number | null, path: string, 
   if (!port) throw new Error("Backend not ready");
   const r = await fetch(`http://127.0.0.1:${port}${path}`, {
     method: "DELETE",
-    headers: { "Content-Type": "application/json" },
+    headers: backendHeaders({ "Content-Type": "application/json" }),
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   return r.json();

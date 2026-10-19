@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useBackend, apiGet, apiPost } from "../lib/BackendContext";
+import { useBackend, apiGet, apiPost, backendHeaders, backendUrl } from "../lib/BackendContext";
 import { useI18n } from "../lib/I18nContext";
 import type { PageContext } from "../components/Layout";
 import LoadingDots from "../components/LoadingDots";
@@ -132,7 +132,7 @@ export default function Account() {
     formData.append("model", modelRef.current);
 
     try {
-      const r = await fetch(`http://127.0.0.1:${port}/account/skin/upload`, { method: "POST", body: formData });
+      const r = await fetch(`http://127.0.0.1:${port}/account/skin/upload`, { method: "POST", body: formData, headers: backendHeaders() });
       const res = await r.json();
       if (res.ok) {
         setMessage({ text: t("account_skin_uploaded", "Скин загружен."), ok: true });
@@ -185,7 +185,7 @@ export default function Account() {
   const grad = RANK_GRADIENTS[level];
 
   const gradVars = grad ? ({ "--c1": grad[0], "--c2": grad[1] } as React.CSSProperties) : {};
-  const skinSrc = port ? `http://127.0.0.1:${port}/skin/model?w=220&h=360&_v=${skinVersion}` : null;
+  const skinSrc = port ? backendUrl(port, `/skin/model?w=220&h=360&_v=${skinVersion}`) : null;
 
   return (
     <div className="innerLayout">

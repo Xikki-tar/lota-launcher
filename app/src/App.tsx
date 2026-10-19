@@ -13,12 +13,18 @@ import Friends from "./pages/Friends";
 import ErrorBoundary from "./components/ErrorBoundary";
 import UpdateDialog from "./components/UpdateDialog";
 import LoadingDots from "./components/LoadingDots";
-import { BackendProvider } from "./lib/BackendContext";
+import { BackendProvider, backendHeaders, setBackendKey } from "./lib/BackendContext";
 import { I18nProvider } from "./lib/I18nContext";
 import { checkForUpdate, isInAppUpdateMode, type UpdateCheckResult } from "./lib/update";
 import "./App.css";
 
 type AppState = "loading" | "login" | "main";
+
+async function resolveKey(): Promise<string> {
+  const envKey = String(import.meta.env.VITE_BACKEND_KEY ?? "");
+  if (envKey) return envKey;
+  return invoke<string>("backend_key");
+}
 
 async function resolvePort(): Promise<number> {
   // дев: порт из env, продакшн: tauri стартует питон и отдаёт порт
@@ -53,10 +59,11 @@ export default function App() {
 
   async function initApp() {
     try {
+      setBackendKey(await resolveKey());
       const port = await resolvePort();
       console.log("[App] port resolved:", port);
       setBackendPort(port);
-      const auth = await fetch(`http://127.0.0.1:${port}/auth/load`).then(r => r.json());
+      const auth = await fetch(`http://127.0.0.1:${port}/auth/load`, { headers: backendHeaders() }).then(r => r.json());
       console.log("[App] auth/load →", JSON.stringify(auth));
       setState(auth?.token ? "main" : "login");
     } catch (e) {

@@ -75,6 +75,7 @@ async fn watch_game_then_show(app: AppHandle) {
         let Some(port) = crate::commands::backend::backend_port() else { break };
         let state = match client
             .get(format!("http://127.0.0.1:{port}/play/state"))
+            .header("X-Lota-Key", crate::commands::backend::backend_key())
             .timeout(Duration::from_secs(3))
             .send()
             .await

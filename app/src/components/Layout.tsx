@@ -1,6 +1,6 @@
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { useEffect, useRef, useState, useCallback } from "react";
-import { useBackend, apiGet, apiPost, invalidateCache } from "../lib/BackendContext";
+import { useBackend, apiGet, apiPost, invalidateCache, backendHeaders, backendUrl } from "../lib/BackendContext";
 import { useI18n } from "../lib/I18nContext";
 import { win } from "../lib/tauri";
 import { startProgress, applyProgress, stopTracking, setProgressMeta, useProgress } from "../lib/progressStore";
@@ -34,7 +34,7 @@ export interface PageContext {
 
 function SkinHead({ port, username }: { port: number | null; username: string }) {
   const [failed, setFailed] = useState(false);
-  const src = port ? `http://127.0.0.1:${port}/skin/head?size=40&_t=${port}` : null;
+  const src = port ? backendUrl(port, `/skin/head?size=40&_t=${port}`) : null;
 
   if (!src || failed) {
     return <div className={styles.profileAvatar}>{username[0]?.toUpperCase() ?? "?"}</div>;
@@ -62,7 +62,8 @@ function DebugConsole({ port }: { port: number | null }) {
       if (!port || isAppHidden()) return;
       try {
         const res = await fetch(
-          `http://127.0.0.1:${port}/debug/logs?since=${offsetRef.current}`
+          `http://127.0.0.1:${port}/debug/logs?since=${offsetRef.current}`,
+          { headers: backendHeaders() }
         );
         if (!res.ok) return;
         const data: { lines: string[]; total: number } = await res.json();

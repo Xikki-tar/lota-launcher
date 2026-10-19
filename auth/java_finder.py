@@ -19,9 +19,27 @@ def is_executable(path: str) -> bool:
     return os.path.isfile(path) and os.access(path, os.X_OK)
 
 
+JAVA_EXECUTABLE_NAMES = {"java", "java.exe", "javaw", "javaw.exe"}
+
+
+def is_safe_java_path(java_path: str) -> bool:
+    path = str(java_path or "").strip()
+    if not path or path.startswith(("\\\\", "//")):
+        return False
+    if os.path.basename(path).lower() not in JAVA_EXECUTABLE_NAMES:
+        return False
+    try:
+        resolved = os.path.realpath(path)
+    except (OSError, ValueError):
+        return False
+    if resolved.startswith(("\\\\", "//")) or os.path.basename(resolved).lower() not in JAVA_EXECUTABLE_NAMES:
+        return False
+    return is_executable(resolved)
+
+
 def get_java_version(java_path: str) -> str:
     path = str(java_path or "").strip()
-    if not path or not os.path.exists(path):
+    if not path or not os.path.exists(path) or not is_safe_java_path(path):
         return "unknown version"
     try:
         p = subprocess.run(
