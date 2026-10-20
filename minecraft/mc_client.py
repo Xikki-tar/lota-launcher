@@ -416,17 +416,21 @@ def ensure_forge_version(versions_dir: Path, java_path: str, game_dir: Path, sta
     jar_path = ver_dir / f"{version_id}.jar"
 
     if json_path.exists() and jar_path.exists():
+        print(f"[forge] {version_id} already installed", flush=True)
         return version_id
 
+    print(f"[forge] {version_id} not installed (json {json_path.exists()}, jar {jar_path.exists()})", flush=True)
     ver_dir.mkdir(parents=True, exist_ok=True)
     json_url = f"{FORGE_MAVEN_BASE}/forge-{MC_VERSION}-{FORGE_VERSION}.json"
     jar_url = f"{FORGE_MAVEN_BASE}/forge-{MC_VERSION}-{FORGE_VERSION}.jar"
 
     if _check_url_exists(json_url):
+        print(f"[forge] trying direct download: {json_url}", flush=True)
         try:
             data = _download_json(json_url, json_path)
             real_id = str(data.get("id") or version_id)
             if real_id != version_id:
+                print(f"[forge] version json declares id {real_id}", flush=True)
                 ver_dir = versions_dir / real_id
                 ver_dir.mkdir(parents=True, exist_ok=True)
                 json_path = ver_dir / f"{real_id}.json"
@@ -435,9 +439,12 @@ def ensure_forge_version(versions_dir: Path, java_path: str, game_dir: Path, sta
                 version_id = real_id
 
             _download_file(jar_url, jar_path, None, None)
+            print(f"[forge] {version_id} installed by direct download", flush=True)
             return version_id
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[forge] direct download failed, falling back to installer: {type(exc).__name__}: {exc}", flush=True)
+    else:
+        print(f"[forge] no version json on maven ({json_url}), using installer", flush=True)
 
     if status:
         status("download_forge_installer")
@@ -470,20 +477,28 @@ def ensure_forge_version(versions_dir: Path, java_path: str, game_dir: Path, sta
         from desktop_integration import windows_hidden_subprocess_kwargs
 
         creationflags = int(windows_hidden_subprocess_kwargs().get("creationflags", 0) or 0)
+    print(f"[forge] running installer: {' '.join(cmd)} (cwd {game_dir})", flush=True)
+    started = time.monotonic()
     proc = subprocess.run(cmd, cwd=str(game_dir), capture_output=True, text=True, creationflags=creationflags)
+    print(f"[forge] installer exited with code {proc.returncode} in {time.monotonic() - started:.1f}s", flush=True)
     if proc.returncode != 0:
         msg = (proc.stderr or proc.stdout or "").strip()
+        for line in msg.splitlines()[-30:]:
+            print(f"[forge]   {line}", flush=True)
         raise RuntimeError(msg or "Forge installer failed")
 
     if json_path.exists() and jar_path.exists():
+        print(f"[forge] {version_id} installed by installer", flush=True)
         return version_id
 
     # Fallback: installer may have created a different version id
     if ver_dir.exists():
         for p in ver_dir.iterdir():
             if p.name.endswith(".json"):
+                print(f"[forge] installer produced version {p.stem} instead of {version_id}", flush=True)
                 return p.stem
 
+    print(f"[forge] installer finished but {json_path.name} / {jar_path.name} are missing", flush=True)
     raise RuntimeError("Forge version files not found after install")
 
 
@@ -515,6 +530,8 @@ def prepare_version(
     assets_dir = game_dir / "assets"
     natives_dir = game_dir / "natives" / version_id
 
+    print(f"[minecraft] preparing {version_id}", flush=True)
+    started = time.monotonic()
     manifest = _download_json(MANIFEST_URL, None)
     version_json = _resolve_version_json(version_id, manifest, versions_dir)
 
@@ -575,6 +592,8 @@ def prepare_version(
         downloads.append(("asset_index", {"url": index_url}, index_path))
 
     total = len(downloads)
+    counts = {kind: sum(1 for k, _, _ in downloads if k == kind) for kind in ("lib", "native", "asset_index")}
+    print(f"[minecraft] checking {counts['lib']} libraries, {counts['native']} natives, {counts['asset_index']} asset index ({DOWNLOAD_WORKERS} workers)", flush=True)
     if status and any(kind == "lib" for kind, _, _ in downloads):
         status("download_libs")
     if status and any(kind == "native" for kind, _, _ in downloads):
@@ -583,6 +602,7 @@ def prepare_version(
         status("download_asset_index")
 
     _download_many(downloads, progress=progress, total=total)
+    print(f"[minecraft] libraries ready in {time.monotonic() - started:.1f}s", flush=True)
 
     for kind, _, dest in downloads:
         if kind == "native":
@@ -611,7 +631,12 @@ def prepare_version(
                 continue
             url = f"{ASSETS_BASE_URL}/{sub}/{h}"
             asset_downloads.append(("asset", {"url": url, "size": size, "sha1": h}, obj_path))
+        print(f"[minecraft] assets: {total_assets} total, {len(asset_downloads)} to download", flush=True)
         _download_many(asset_downloads, progress=progress, initial_done=downloaded, total=total_assets)
+    else:
+        print(f"[minecraft] asset index {index_path.name} missing, skipping assets", flush=True)
+
+    print(f"[minecraft] {version_id} ready in {time.monotonic() - started:.1f}s", flush=True)
 
     return PreparedVersion(
         version_id=version_id,
@@ -640,4 +665,5 @@ def _extract_native(archive_path: Path, natives_dir: Path) -> None:
                 with zf.open(member) as src, open(target, "wb") as dst:
                     shutil.copyfileobj(src, dst)
     except zipfile.BadZipFile:
+        print(f"[minecraft] native {archive_path.name} is not a valid zip, skipped", flush=True)
         return

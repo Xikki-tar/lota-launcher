@@ -23,6 +23,7 @@ DOWNLOAD_WORKERS = 6
 UNIT_ATTEMPTS = 4
 MANIFEST_REFRESHES = 3
 STATE_SAVE_EVERY = 25
+PENDING_LOG_LIMIT = 50
 CHUNK_SIZE = 256 * 1024
 PACK_HEADER = b"PACK\x01"
 PACK_TAG_SIZE = 16
@@ -142,11 +143,15 @@ def remove_closed_links(install_dir: Path) -> None:
     for path, _entry in closed_units(install_dir):
         link = install_dir.joinpath(*PurePosixPath(path).parts)
         try:
-            remove_link(link)
+            if is_link(link):
+                remove_link(link)
+                print(f"[bundle] removed leftover link {path}", flush=True)
             hidden = link.with_name(link.name + HIDDEN_SUFFIX)
             if hidden.exists() and not link.exists():
                 hidden.replace(link)
-        except OSError:
+                print(f"[bundle] restored hidden {path}", flush=True)
+        except OSError as exc:
+            print(f"[bundle] failed to clean leftover link {path}: {exc}", flush=True)
             continue
 
 
@@ -301,17 +306,29 @@ class BuildSync:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         tmp_dir.mkdir(parents=True, exist_ok=True)
         self.state = load_state(self.install_dir)
+        previous_build = self.state.get("build_id")
         self.state["build_id"] = self.build_id
         legacy_files = self._legacy_managed_files() if not self.state["units"] else None
+        print(
+            f"[sync] build {self.build_id}: start into {self.install_dir}, {len(self.state['units'])} units installed"
+            + (f" (previously build {previous_build})" if previous_build not in (None, self.build_id) else "")
+            + (f", legacy install with {len(legacy_files)} files" if legacy_files is not None else ""),
+            flush=True,
+        )
+        started = time.monotonic()
         try:
             units = self._sync_with_refresh()
             if legacy_files is not None:
                 self._remove_legacy_files(legacy_files, units)
             print(
-                f"[sync] build {self.build_id}: modrinth {self.stats['mirror']}, server {self.stats['server']}, "
+                f"[sync] build {self.build_id}: done in {time.monotonic() - started:.1f}s, {self.done_bytes} bytes, "
+                f"modrinth {self.stats['mirror']}, server {self.stats['server']}, "
                 f"fallback {self.stats['fallback']}, reused {self.stats['local']}",
                 flush=True,
             )
+        except BaseException as exc:
+            print(f"[sync] build {self.build_id}: failed after {time.monotonic() - started:.1f}s: {type(exc).__name__}: {exc}", flush=True)
+            raise
         finally:
             save_state(self.install_dir, self.state)
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -321,14 +338,26 @@ class BuildSync:
             manifest = self._fetch_manifest()
             units = _parse_units(manifest.get("units"))
             self.download_token = str(manifest.get("download_token") or "")
+            closed = sum(1 for u in units.values() if u["closed"])
+            dirs = sum(1 for u in units.values() if u["type"] == "dir")
+            mirrored = sum(1 for u in units.values() if u["mirror_url"])
+            raw_count = len(manifest.get("units") or [])
+            print(
+                f"[sync] build {self.build_id}: manifest has {len(units)} units ({closed} closed, {dirs} dirs, {mirrored} on modrinth), "
+                f"{sum(u['size'] for u in units.values())} bytes"
+                + (f", {raw_count - len(units)} invalid entries skipped" if raw_count != len(units) else ""),
+                flush=True,
+            )
             self._remove_missing(units)
             pending = self._pending(units)
+            self._log_pending(pending, units)
             try:
                 self._download_all(pending, units)
                 return units
             except _RefreshManifest:
                 if attempt == MANIFEST_REFRESHES:
                     raise BuildSyncError("download token keeps expiring")
+                print(f"[sync] build {self.build_id}: download token expired, refreshing manifest ({attempt + 1}/{MANIFEST_REFRESHES})", flush=True)
         raise BuildSyncError("unreachable")
 
     def _fetch_manifest(self) -> dict:
@@ -351,6 +380,18 @@ class BuildSync:
         if not data.get("download_token") or not isinstance(data.get("units"), list):
             raise BuildSyncError("manifest: bad response")
         return data
+
+    def _log_pending(self, pending: list[str], units: dict[str, dict]) -> None:
+        size = sum(units[p]["size"] for p in pending)
+        print(f"[sync] build {self.build_id}: {len(pending)} units to download, {size} bytes, {len(units) - len(pending)} up to date", flush=True)
+        for path in pending[:PENDING_LOG_LIMIT]:
+            unit = units[path]
+            entry = self.state["units"].get(path)
+            reason = "new" if not isinstance(entry, dict) else "changed"
+            flags = ", closed" if unit["closed"] else (", modrinth" if unit["mirror_url"] else "")
+            print(f"[sync]   {reason}: {path} ({unit['type']}, {unit['size']} bytes{flags})", flush=True)
+        if len(pending) > PENDING_LOG_LIMIT:
+            print(f"[sync]   ... and {len(pending) - PENDING_LOG_LIMIT} more", flush=True)
 
     def _target(self, path: str) -> Path:
         return self.install_dir.joinpath(*PurePosixPath(path).parts)
@@ -404,6 +445,7 @@ class BuildSync:
     def _remove_missing(self, units: dict[str, dict]) -> None:
         for path in [p for p in self.state["units"] if p not in units]:
             entry = self.state["units"].pop(path)
+            print(f"[sync] build {self.build_id}: removing {path}, no longer in manifest", flush=True)
             if isinstance(entry, dict):
                 self._remove_entry_files(path, entry)
 
@@ -420,6 +462,7 @@ class BuildSync:
         for entry in self.state["units"].values():
             if isinstance(entry, dict):
                 covered.update(entry.get("files") or [])
+        print(f"[sync] build {self.build_id}: cleaning up legacy install ({len(legacy_files)} files listed)", flush=True)
         for raw in legacy_files:
             rel = unit_rel_path(raw)
             if rel is None:
@@ -552,6 +595,7 @@ class BuildSync:
                 raise
             except Exception as exc:
                 last_error = exc
+                print(f"[sync] {path}: server attempt {attempt + 1}/{UNIT_ATTEMPTS} failed: {type(exc).__name__}: {exc}", flush=True)
                 time.sleep(1.5 * (attempt + 1))
         raise BuildSyncError(f"{path}: {last_error}")
 

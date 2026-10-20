@@ -356,3 +356,19 @@ def save_settings(data: dict):
         parser.set("client", key, str(value))
     with cfg.open("w", encoding="utf-8") as f:
         parser.write(f)
+
+
+def remove_settings(keys) -> None:
+    cfg = get_settings_cfg()
+    if not cfg.exists():
+        return
+    parser = configparser.ConfigParser()
+    parser.read(cfg, encoding="utf-8")
+    if not parser.has_section("client"):
+        return
+    changed = False
+    for key in keys:
+        changed = parser.remove_option("client", key) or changed
+    if changed:
+        with cfg.open("w", encoding="utf-8") as f:
+            parser.write(f)

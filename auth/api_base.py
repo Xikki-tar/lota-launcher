@@ -5,12 +5,17 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
-from auth.auth_storage import load_settings, save_settings
+from auth.auth_storage import load_settings, remove_settings
 from auth.settings import DEFAULT_API_BASES
 
 
 DEFAULT_PROBE_TIMEOUT = 2.5
 DEFAULT_CACHE_TTL_SECONDS = 300.0
+
+_SAVED_DEFAULT_API_BASES = (
+    {"https://ru.lota.work", "https://eu.lota.work"},
+    {"https://test.lota.work"},
+)
 
 _api_base_cache_lock = threading.Lock()
 _api_base_cache_value = ""
@@ -66,16 +71,20 @@ def get_api_candidates() -> list[str]:
     return normalized
 
 
-def ensure_default_api_bases() -> None:
+def drop_saved_default_api_bases() -> None:
     settings = load_settings()
-    if isinstance(settings, dict) and (
-        str(settings.get("api_base_urls") or "").strip() or str(settings.get("api_base_url") or "").strip()
-    ):
+    stale = {}
+    for key in ("api_base_urls", "api_base_url"):
+        saved = {base.lower() for base in _split_candidates(str(settings.get(key) or ""))}
+        if saved in _SAVED_DEFAULT_API_BASES:
+            stale[key] = settings.get(key)
+    if not stale:
         return
     try:
-        save_settings({"api_base_urls": DEFAULT_API_BASES})
+        remove_settings(stale)
+        print(f"[api] dropped api bases saved by older versions: {stale}", flush=True)
     except Exception as exc:
-        print(f"[api] failed to write default api_base_urls: {type(exc).__name__}: {exc}", flush=True)
+        print(f"[api] failed to drop saved api bases: {type(exc).__name__}: {exc}", flush=True)
 
 
 def _probe_candidate(base_url: str, timeout: float) -> tuple[str, float]:
@@ -104,6 +113,7 @@ def resolve_fastest_api_base(*, force_refresh: bool = False, timeout: float = DE
     candidates = get_api_candidates()
     if len(candidates) == 1:
         winner = candidates[0]
+        print(f"[api] using {winner} (only candidate)", flush=True)
         with _api_base_cache_lock:
             _api_base_cache_value = winner
             _api_base_cache_until = time.monotonic() + DEFAULT_CACHE_TTL_SECONDS

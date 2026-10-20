@@ -145,14 +145,17 @@ class LibraryService:
     def load_catalog(self, token: str = "", *, prefer_remote: bool = True) -> LibraryCatalog:
         self.prepare_dirs()
         remote_catalog = self._fetch_remote_catalog(token) if prefer_remote else None
+        instances = self.load_instances()
         if remote_catalog is not None:
-            builds = self.load_instances() + remote_catalog.builds
+            builds = instances + remote_catalog.builds
+            print(f"[library] catalog from server: {len(remote_catalog.builds)} builds, {len(instances)} instances", flush=True)
             return LibraryCatalog(builds=builds, dlc=remote_catalog.dlc, base_dir=remote_catalog.base_dir)
 
         if self.paths.manifest_path.exists():
             builds, dlc = self._load_from_manifest(self.paths.manifest_path, self.paths.cache_dir)
             if builds or dlc:
-                builds = self.load_instances() + builds
+                print(f"[library] catalog from local cache{' (server unavailable)' if prefer_remote else ''}: {len(builds)} builds, {len(instances)} instances", flush=True)
+                builds = instances + builds
                 return LibraryCatalog(builds=builds, dlc=dlc, base_dir=self.paths.cache_dir)
 
         local_dir = self.local_asset_dir()
@@ -162,7 +165,8 @@ class LibraryService:
         else:
             builds = self._load_json_items(local_dir / "builds.json")
             dlc = self._load_json_items(local_dir / "dlc.json")
-        builds = self.load_instances() + builds
+        print(f"[library] catalog from bundled assets (no server, no cache): {len(builds)} builds, {len(instances)} instances", flush=True)
+        builds = instances + builds
         return LibraryCatalog(builds=builds, dlc=dlc, base_dir=local_dir)
 
     def build_key(self, item: dict) -> str:
@@ -294,10 +298,12 @@ class LibraryService:
     def _fetch_remote_catalog(self, token: str) -> LibraryCatalog | None:
         token = str(token or "").strip()
         if not token:
+            print("[library] remote catalog skipped: not logged in", flush=True)
             return None
         try:
             base_url = self._api_base_resolver()
-        except Exception:
+        except Exception as exc:
+            print(f"[library] remote catalog skipped: no api base: {type(exc).__name__}: {exc}", flush=True)
             return None
         cached_hash = self._read_cached_hash() if self.paths.manifest_path.exists() else ""
         try:
@@ -306,25 +312,32 @@ class LibraryService:
                 json={"token": token, "hash": cached_hash},
                 timeout=10,
             )
-        except requests.RequestException:
+        except requests.RequestException as exc:
+            print(f"[library] remote catalog failed: {type(exc).__name__}: {exc}", flush=True)
             return None
         if response.status_code != 200:
+            print(f"[library] remote catalog failed: HTTP {response.status_code}", flush=True)
             return None
         try:
             data = response.json()
         except ValueError:
+            print("[library] remote catalog failed: response is not json", flush=True)
             return None
         if not isinstance(data, dict):
+            print(f"[library] remote catalog failed: unexpected response type {type(data).__name__}", flush=True)
             return None
 
         if data.get("ok") is True and self.paths.manifest_path.exists():
+            print(f"[library] remote catalog unchanged (hash {cached_hash or '-'}), using cache", flush=True)
             builds, dlc = self._load_from_manifest(self.paths.manifest_path, self.paths.cache_dir)
             return LibraryCatalog(builds=builds, dlc=dlc, base_dir=self.paths.cache_dir)
 
         manifest = data.get("manifest")
         if not isinstance(manifest, dict):
+            print(f"[library] remote catalog failed: no manifest in response (keys {sorted(data)})", flush=True)
             return None
 
+        print(f"[library] remote catalog changed: hash {cached_hash or '-'} -> {data.get('hash') or '-'}, downloading files", flush=True)
         self.paths.manifest_path.write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2),
             encoding="utf-8",

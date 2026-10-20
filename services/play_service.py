@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -146,6 +147,47 @@ SYSTEM_OPENAL_CANDIDATES = (
     "/usr/lib/x86_64-linux-gnu/libopenal.so.1",
     "/usr/lib/aarch64-linux-gnu/libopenal.so.1",
 )
+
+
+GPU_PREFERENCES_KEY = r"Software\Microsoft\DirectX\UserGpuPreferences"
+GPU_HIGH_PERFORMANCE = "GpuPreference=2;"
+
+
+def prefer_high_performance_gpu(java_path: str) -> list[str]:
+    if platform.system() != "Windows" or not java_path:
+        return []
+    try:
+        import winreg
+    except ImportError:
+        return []
+    java = Path(shutil.which(java_path) or java_path).resolve()
+    targets = [java.parent / name for name in ("java.exe", "javaw.exe") if (java.parent / name).is_file()]
+    results = []
+    try:
+        key = winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, GPU_PREFERENCES_KEY, 0, winreg.KEY_READ | winreg.KEY_SET_VALUE)
+    except OSError as exc:
+        return [f"registry unavailable: {exc}"]
+    with key:
+        for target in targets:
+            name = str(target)
+            try:
+                current, _type = winreg.QueryValueEx(key, name)
+                if current == GPU_HIGH_PERFORMANCE:
+                    results.append(f"{target.name}: high performance GPU already set")
+                else:
+                    results.append(f"{target.name}: kept user choice {current!r}")
+                continue
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                results.append(f"{target.name}: read failed: {exc}")
+                continue
+            try:
+                winreg.SetValueEx(key, name, 0, winreg.REG_SZ, GPU_HIGH_PERFORMANCE)
+                results.append(f"{target.name}: set high performance GPU")
+            except OSError as exc:
+                results.append(f"{target.name}: write failed: {exc}")
+    return results
 
 
 def resolve_custom_java(java_path: str) -> str:
@@ -391,8 +433,11 @@ def _remove_temp_dir(path: Path) -> None:
 
 
 def _remove_stale_bundle_dirs() -> None:
-    for path in _load_session_dirs():
+    stale = _load_session_dirs()
+    for path in stale:
         _remove_temp_dir(path)
+    if stale:
+        print(f"[bundle] removed {len(stale)} leftover temp dirs from a previous session", flush=True)
     _save_session_dirs([])
 
 
@@ -404,8 +449,9 @@ def _restore_disabled_mods(mods_dir: Path) -> None:
         if not original.exists():
             try:
                 path.replace(original)
-            except OSError:
-                pass
+                print(f"[bundle] restored mod left disabled by a previous session: {original.name}", flush=True)
+            except OSError as exc:
+                print(f"[bundle] failed to restore disabled mod {original.name}: {exc}", flush=True)
 
 
 
@@ -469,6 +515,7 @@ class PlayService:
 
         emit_status("play_status_build_check")
         catalog = library_service.load_catalog(token)
+        print(f"[play] build check: selected={selected or '-'}, catalog has {len(catalog.builds)} builds, logged in={bool(token)}", flush=True)
 
         if selected:
             selected_item = next(
@@ -479,10 +526,15 @@ class PlayService:
             selected_dir = library_service.paths.builds_dir / selected
 
             if selected_item is not None:
+                expected = library_service.expected_build_updated_at(selected_source_item or selected_item)
+                installed = library_service.load_build_meta(selected_item).get("updated_at")
                 if library_service.is_build_up_to_date(selected_item, source_item=selected_source_item):
+                    print(f"[play] selected build {selected} is up to date (updated_at {installed or '-'})", flush=True)
                     return selected
                 if not allow_build_update and _build_dir_has_payload(selected_dir):
+                    print(f"[play] selected build {selected} is outdated but updates are not allowed, launching installed files", flush=True)
                     return selected
+                print(f"[play] selected build {selected} needs download: installed {installed or 'nothing'}, server {expected or '-'}", flush=True)
                 self._download_build_for_play(
                     library_service,
                     selected_item,
@@ -494,13 +546,17 @@ class PlayService:
                 return selected
 
             if _build_dir_has_payload(selected_dir):
+                print(f"[play] selected build {selected} is not in the catalog, launching installed files", flush=True)
                 return selected
+            print(f"[play] selected build {selected} is not in the catalog and not installed, falling back to latest", flush=True)
 
         builds = [item for item in catalog.builds if isinstance(item, dict) and not item.get("is_instance")]
         if not builds:
+            print("[play] no builds in the catalog", flush=True)
             raise RuntimeError(t("play_error_build_unavailable"))
         latest = max(builds, key=self._build_latest_sort_key)
         build_key = library_service.build_key(latest)
+        print(f"[play] latest build: {build_key} (id {latest.get('id')})", flush=True)
 
         if not library_service.is_build_up_to_date(latest):
             self._download_build_for_play(library_service, latest, token, status=status, progress=progress)
@@ -550,10 +606,12 @@ class PlayService:
         source_item: dict | None = None,
     ) -> None:
         if not token:
+            print("[play] build download impossible: not logged in", flush=True)
             raise RuntimeError(t("play_error_build_auth"))
         try:
             int((source_item or item).get("id"))
         except Exception:
+            print(f"[play] build download impossible: bad build id {(source_item or item).get('id')!r}", flush=True)
             raise RuntimeError(t("play_error_build_unavailable"))
 
         if status:
@@ -569,10 +627,14 @@ class PlayService:
 
     def ensure_oracle_java_21(self, status=None, progress=None) -> str:
         current = self._oracle_java_executable()
-        if current and _is_executable(str(current)) and _java_version_is_21(get_java_version(str(current))):
+        executable = bool(current) and _is_executable(str(current))
+        version = get_java_version(str(current)) if executable else "missing"
+        if executable and _java_version_is_21(version):
+            print(f"[java] launcher JDK ready: {current} ({version})", flush=True)
             self._save_java_path(current)
             return str(current)
 
+        print(f"[java] launcher JDK 21 not usable at {current} ({version}), downloading", flush=True)
         if status:
             status(t("play_status_java_download"))
         url, archive_kind = self._oracle_java_download()
@@ -596,8 +658,10 @@ class PlayService:
                 _safe_extract_tar(archive_path, staging_dir)
             java_exe = self._find_extracted_java(staging_dir)
             if not java_exe:
+                print(f"[java] no bin/java found in extracted {archive_path.name}", flush=True)
                 raise RuntimeError(t("play_error_java"))
             jdk_home = java_exe.parent.parent
+            print(f"[java] installing {jdk_home.name} into {runtime_dir}", flush=True)
             shutil.rmtree(runtime_dir, ignore_errors=True)
             shutil.move(str(jdk_home), str(runtime_dir))
         finally:
@@ -605,15 +669,20 @@ class PlayService:
 
         current = self._oracle_java_executable()
         if not current or not _is_executable(str(current)):
+            print(f"[java] installed JDK is not executable: {current}", flush=True)
             raise RuntimeError(t("play_error_java"))
+        print(f"[java] launcher JDK installed: {current} ({get_java_version(str(current))})", flush=True)
         self._save_java_path(current)
         if status:
             status(t("play_status_java_ready"))
         return str(current)
 
     def _download_file(self, url: str, dest: Path, progress=None) -> None:
+        print(f"[download] GET {url} -> {dest}", flush=True)
+        started = time.monotonic()
         with requests.get(url, stream=True, timeout=120) as response:
             if response.status_code != 200:
+                print(f"[download] {url} failed: HTTP {response.status_code}", flush=True)
                 raise RuntimeError(f"HTTP {response.status_code}")
             total = int(response.headers.get("Content-Length") or 0)
             downloaded = 0
@@ -626,6 +695,7 @@ class PlayService:
                     report_download_bytes(dest.name, len(chunk))
                     if progress and total > 0:
                         progress(max(0, min(100, int(downloaded * 100 / total))))
+        print(f"[download] {dest.name}: {downloaded} of {total or '?'} bytes in {time.monotonic() - started:.1f}s", flush=True)
 
     def _oracle_java_download(self) -> tuple[str, str]:
         system = platform.system()
@@ -689,9 +759,12 @@ class PlayService:
             print(f"[bundle] key request rejected by {base}: HTTP {response.status_code}, build {build_id}: {reason}", flush=True)
             return None
         try:
-            return base64.b64decode(data.get("key") or "")
-        except Exception:
+            key = base64.b64decode(data.get("key") or "")
+        except Exception as exc:
+            print(f"[bundle] key for build {build_id} is not valid base64: {type(exc).__name__}", flush=True)
             return None
+        print(f"[bundle] key received for build {build_id} ({len(key) * 8}-bit)", flush=True)
+        return key
 
     def decrypt_archive(self, encrypted_bytes: bytes, key32: bytes) -> bytes:
         if len(encrypted_bytes) < 2 + 4 + 12:
@@ -759,7 +832,7 @@ class PlayService:
         link_dir(link, target)
         state.links.append(link)
 
-    def prepare_bundle_files(self, game_dir: Path) -> BundleState | None:
+    def prepare_bundle_files(self, game_dir: Path, hide=None) -> BundleState | None:
         _remove_stale_bundle_dirs()
         _restore_disabled_mods(game_dir / "mods")
         remove_closed_links(game_dir)
@@ -767,11 +840,14 @@ class PlayService:
         closed = closed_units(game_dir)
         legacy = self._legacy_bundle(game_dir)
         if not closed and legacy is None:
+            print("[bundle] build has no protected content", flush=True)
             return None
         try:
             build_id = legacy[1] if legacy else int(load_state(game_dir).get("build_id"))
         except (TypeError, ValueError):
+            print("[bundle] protected content present but build id is unknown", flush=True)
             raise RuntimeError(t("play_bundle_key_error"))
+        print(f"[bundle] build {build_id}: {len(closed)} closed units" + (", legacy archive" if legacy else ""), flush=True)
 
         key32 = self.request_bundle_key(build_id)
         if not key32:
@@ -784,6 +860,8 @@ class PlayService:
             disabled=[],
             game_args=[],
         )
+        if hide:
+            hide(state.temp_dir)
         _save_session_dirs([state.temp_dir])
         maven_dir = state.temp_dir / _random_name()
         group = _random_name()
@@ -791,7 +869,8 @@ class PlayService:
         try:
             if legacy:
                 payload_dir = state.temp_dir / _random_name()
-                extract_zip(io.BytesIO(self.decrypt_archive(legacy[0].read_bytes(), key32)), payload_dir)
+                files = extract_zip(io.BytesIO(self.decrypt_archive(legacy[0].read_bytes(), key32)), payload_dir)
+                print(f"[bundle] legacy archive {legacy[0].name}: {len(files)} files", flush=True)
                 self._overlay_tree(payload_dir, game_dir, maven_dir, group, coords, state)
                 shutil.rmtree(payload_dir, ignore_errors=True)
 
@@ -800,59 +879,73 @@ class PlayService:
                 root = state.temp_dir / _random_name()
                 plain = state.temp_dir / _random_name()
                 decrypt_pack_file(game_dir / CLOSED_DIR / str(entry["payload"]), key32, plain)
-                extract_zip(plain, root)
+                files = extract_zip(plain, root)
                 plain.unlink(missing_ok=True)
                 if entry.get("type") == "dir" and rel.parts[0].lower() != "mods":
                     self._link_closed_dir(game_dir.joinpath(*rel.parts), root.joinpath(*rel.parts), state)
+                    mode = "linked"
                 else:
                     self._overlay_tree(root, game_dir, maven_dir, group, coords, state)
-        except Exception:
+                    mode = "overlay"
+                print(f"[bundle] closed unit {path} ({entry.get('type') or 'file'}): {len(files)} files, {mode}", flush=True)
+        except Exception as exc:
+            print(f"[bundle] preparing protected content failed: {type(exc).__name__}: {exc}", flush=True)
             self.cleanup_bundle_files(state)
             raise
 
         if coords:
             state.game_args = ["--fml.mavenRoots", str(maven_dir), "--fml.mods", ",".join(coords)]
+        print(f"[bundle] ready: {len(coords)} protected mods, {len(state.written)} overlay files, {len(state.links)} linked dirs", flush=True)
         return state
 
     def cleanup_bundle_files(self, bundle_state: BundleState | None) -> None:
         if not bundle_state:
             return
+        failures: list[str] = []
         for link in bundle_state.links:
             try:
                 remove_link(link)
-            except OSError:
-                pass
+            except OSError as exc:
+                failures.append(f"remove link {link}: {exc}")
         for hidden, original in bundle_state.hidden:
             try:
                 if hidden.exists() and not original.exists():
                     hidden.replace(original)
-            except OSError:
-                pass
+            except OSError as exc:
+                failures.append(f"restore {original}: {exc}")
         for path in bundle_state.written:
             try:
                 if path.exists():
                     path.unlink()
-            except Exception:
-                pass
+            except Exception as exc:
+                failures.append(f"remove overlay file {path}: {exc}")
         for backup, dst in bundle_state.backups:
             try:
                 if dst.exists():
                     dst.unlink()
                 if backup.exists():
                     backup.replace(dst)
-            except Exception:
-                pass
+            except Exception as exc:
+                failures.append(f"restore backup {dst}: {exc}")
         for disabled, original in bundle_state.disabled:
             try:
                 if disabled.exists() and not original.exists():
                     disabled.replace(original)
-            except Exception:
-                pass
+            except Exception as exc:
+                failures.append(f"re-enable mod {original.name}: {exc}")
         _remove_temp_dir(bundle_state.temp_dir)
         try:
             _save_session_dirs([d for d in _load_session_dirs() if d != bundle_state.temp_dir])
-        except Exception:
-            pass
+        except Exception as exc:
+            failures.append(f"update session file: {exc}")
+        print(
+            f"[bundle] cleanup: {len(bundle_state.links)} links, {len(bundle_state.hidden)} hidden dirs, "
+            f"{len(bundle_state.written)} overlay files, {len(bundle_state.backups)} backups, "
+            f"{len(bundle_state.disabled)} disabled mods, {len(failures)} failures",
+            flush=True,
+        )
+        for failure in failures:
+            print(f"[bundle] cleanup failed: {failure}", flush=True)
 
     def open_log_file(self, spec) -> tuple[Path, object]:
         log_name = datetime.now().strftime("launcher_%Y-%m-%d_%H-%M-%S.log")

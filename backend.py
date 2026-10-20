@@ -42,7 +42,7 @@ class _FakeSignal:
 _qt_mock.QThread = _FakeQThread
 _qt_mock.Signal = _FakeSignal
 
-from flask import Flask, request, jsonify, Response, send_file
+from flask import Flask, g, request, jsonify, Response, send_file
 import requests as http
 
 from auth.auth_storage import (
@@ -58,7 +58,7 @@ from auth.auth_storage import (
     load_skin_model,
     save_skin_model,
 )
-from auth.api_base import ensure_default_api_bases, get_api_base
+from auth.api_base import drop_saved_default_api_bases, get_api_base
 from services.library_service import LibraryService
 from window.i18n import set_language, t
 
@@ -112,17 +112,52 @@ def _guard():
         return jsonify({"ok": False, "error": "unauthorized"}), 403
 
 
-_ACTION_LOG_SKIP = ("/play/state", "/debug/logs", "/tasks/active_downloads", "/task/")
+_FRONT_QUIET_PATHS = ("/play/state", "/debug/logs", "/tasks/active_downloads", "/task/")
+_FRONT_NO_BODY_PATHS = ("/i18n", "/library/catalog", "/news")
+_FRONT_IGNORED_ARGS = {"key", "_t"}
+
+
+def _front_request_summary() -> str:
+    parts = []
+    args = {k: v for k, v in request.args.items() if k not in _FRONT_IGNORED_ARGS}
+    if args:
+        parts.append(f"args={_short(_redact(args))}")
+    if request.is_json:
+        parts.append(f"json={_short(_redact(request.get_json(silent=True)))}")
+    elif request.form:
+        parts.append(f"form={_short(_redact(request.form.to_dict()))}")
+    if request.files:
+        parts.append("files=" + ", ".join(f"{name}:{f.filename} ({f.mimetype})" for name, f in request.files.items()))
+    return " ".join(parts)
+
+
+def _front_response_summary(response) -> str:
+    if response.direct_passthrough or not response.is_json or request.path.startswith(_FRONT_NO_BODY_PATHS):
+        size = response.content_length
+        return f"<{response.mimetype or 'empty'} {size if size is not None else '?'} bytes>"
+    return _short(_redact(response.get_json(silent=True)))
 
 
 @app.before_request
-def _log_action():
+def _log_front_request():
     if request.method == "OPTIONS":
         return
-    path = request.path
-    if any(path.startswith(prefix) for prefix in _ACTION_LOG_SKIP):
+    g.front_started = time.monotonic()
+    if request.path.startswith(_FRONT_QUIET_PATHS):
         return
-    print(f"[action] {request.method} {path}", flush=True)
+    print(f"[front] -> {request.method} {request.path} {_front_request_summary()}".rstrip(), flush=True)
+
+
+@app.after_request
+def _log_front_response(response):
+    if request.method == "OPTIONS":
+        return response
+    if request.path.startswith(_FRONT_QUIET_PATHS) and response.status_code < 400:
+        return response
+    started = g.get("front_started")
+    took = f" in {time.monotonic() - started:.2f}s" if started is not None else " (rejected before handling)"
+    print(f"[front] <- {response.status_code} {request.method} {request.path}{took}: {_front_response_summary(response)}", flush=True)
+    return response
 
 _LOG_MAX = 2000
 _log_lines: deque[str] = deque(maxlen=_LOG_MAX)
@@ -172,11 +207,12 @@ def _open_launcher_log():
 
 _log_file = _open_launcher_log()
 _prune_launcher_logs()
-ensure_default_api_bases()
+drop_saved_default_api_bases()
 
-_HTTP_SECRET_KEYS = {"token", "code", "key", "download_token", "link_token", "access_token", "password"}
+_HTTP_SECRET_KEYS = {"token", "code", "key", "download_token", "link_token", "access_token", "password", "telegram_url"}
 _HTTP_QUIET_PATHS = ("/api/build/unit",)
-_HTTP_BODY_LIMIT = 400
+_HTTP_BODY_LIMIT = 1000
+_http_ids = itertools.count(1)
 
 
 def _redact(value):
@@ -201,10 +237,11 @@ def _install_http_logging() -> None:
         return
 
     def logged_request(self, method, url, *args, **kwargs):
-        path = urlsplit(str(url)).path
-        if not path.startswith("/api/"):
+        parts = urlsplit(str(url))
+        if not parts.path.startswith("/api/"):
             return original(self, method, url, *args, **kwargs)
-        quiet = path.startswith(_HTTP_QUIET_PATHS)
+        quiet = parts.path.startswith(_HTTP_QUIET_PATHS)
+        request_id = next(_http_ids)
         sent = []
         if kwargs.get("params"):
             sent.append(f"params={_short(_redact(dict(kwargs['params'])))}")
@@ -214,19 +251,22 @@ def _install_http_logging() -> None:
             sent.append(f"data={_short(_redact(kwargs['data']))}")
         if kwargs.get("files"):
             sent.append(f"files={list(kwargs['files'])}")
-        target = f"{method.upper()} {urlsplit(str(url)).scheme}://{urlsplit(str(url)).netloc}{path}"
+        sent_text = " ".join(sent)
+        target = f"{method.upper()} {parts.path}"
+        if not quiet:
+            print(f"[http] #{request_id} -> {method.upper()} {parts.scheme}://{parts.netloc}{parts.path} {sent_text}".rstrip(), flush=True)
         started = time.monotonic()
         try:
             response = original(self, method, url, *args, **kwargs)
         except Exception as exc:
-            print(f"[http] {target} {' '.join(sent)} -> FAILED after {time.monotonic() - started:.2f}s: {type(exc).__name__}: {exc}", flush=True)
+            print(f"[http] #{request_id} <- FAILED {target} after {time.monotonic() - started:.2f}s: {type(exc).__name__}: {exc}" + (f" | sent {sent_text}" if quiet else ""), flush=True)
             raise
         elapsed = time.monotonic() - started
         if quiet and response.status_code == 200:
             return response
         body = ""
         content_type = response.headers.get("Content-Type", "")
-        if kwargs.get("stream"):
+        if kwargs.get("stream") and response.status_code == 200:
             body = f"<stream {response.headers.get('Content-Length', '?')} bytes>"
         elif content_type.startswith("application/json"):
             try:
@@ -237,7 +277,7 @@ def _install_http_logging() -> None:
             body = _short(response.text or "")
         else:
             body = f"<{content_type or 'binary'} {len(response.content)} bytes>"
-        print(f"[http] {target} {' '.join(sent)} -> {response.status_code} in {elapsed:.2f}s: {body}", flush=True)
+        print(f"[http] #{request_id} <- {response.status_code} {target} in {elapsed:.2f}s: {body}" + (f" | sent {sent_text}" if quiet else ""), flush=True)
         return response
 
     logged_request._lota_logged = True
@@ -247,8 +287,29 @@ def _install_http_logging() -> None:
 _install_http_logging()
 
 
+_hidden_paths: tuple[str, ...] = ()
+_hidden_lock = threading.Lock()
+
+
+def _hide_path(path) -> None:
+    global _hidden_paths
+    raw = str(path)
+    values = {raw, os.path.realpath(raw), Path(raw).as_posix(), Path(os.path.realpath(raw)).as_posix()}
+    with _hidden_lock:
+        merged = set(_hidden_paths) | {v for v in values if v}
+        _hidden_paths = tuple(sorted(merged, key=len, reverse=True))
+
+
+def _scrub(text: str) -> str:
+    for value in _hidden_paths:
+        if value in text:
+            text = text.replace(value, "<hidden>")
+    return text
+
+
 def _log_append(line: str, persist: bool = True) -> None:
     global _log_total
+    line = _scrub(line)
     with _log_lock:
         _log_lines.append(line)
         _log_total += 1
@@ -269,7 +330,7 @@ class _LogWriter(io.TextIOBase):
     def write(self, s: str) -> int:
         if self._orig:
             try:
-                self._orig.write(s)
+                self._orig.write(_scrub(s))
                 self._orig.flush()
             except Exception:
                 pass
@@ -292,11 +353,12 @@ sys.stdout = _LogWriter(sys.__stdout__, "")
 sys.stderr = _LogWriter(sys.__stderr__, "[ERR] ")
 import logging as _logging
 
+_ACCESS_LOG_RE = re.compile(r'"[A-Z]+ \S+ HTTP/[\d.]+" \d{3}')
+
+
 class _WerkzeugFilter(_logging.Filter):
-    _SKIP = ("/debug/logs", "/play/state", "/skin/head", "/task/", "/tasks/active_downloads")
     def filter(self, record: _logging.LogRecord) -> bool:
-        msg = record.getMessage()
-        return not any(s in msg for s in self._SKIP)
+        return record.levelno > _logging.INFO or not _ACCESS_LOG_RE.search(_ANSI_RE.sub("", record.getMessage()))
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 _QUERY_SECRET_RE = re.compile(r"\b(token|link_token|download_token|access_token|code|key)=[^&\s\"]+")
@@ -305,7 +367,7 @@ _QUERY_SECRET_RE = re.compile(r"\b(token|link_token|download_token|access_token|
 class _ConsoleLogHandler(_logging.Handler):
     def emit(self, record: _logging.LogRecord) -> None:
         try:
-            text = _QUERY_SECRET_RE.sub(r"\1=***", _ANSI_RE.sub("", self.format(record)))
+            text = _scrub(_QUERY_SECRET_RE.sub(r"\1=***", _ANSI_RE.sub("", self.format(record))))
         except Exception:
             return
         if record.levelno >= _logging.ERROR:
@@ -340,16 +402,25 @@ def _new_task(kind: str = "generic") -> str:
     import uuid
     task_id = str(uuid.uuid4())[:8]
     with _tasks_lock:
-        _tasks[task_id] = {"state": "running", "progress": 0, "error": None, "result": None, "kind": kind}
+        _tasks[task_id] = {"state": "running", "progress": 0, "error": None, "result": None, "kind": kind, "started": time.monotonic()}
+    print(f"[task] {task_id} ({kind}) started", flush=True)
     return task_id
 
 
 def _task_done(task_id: str, error: str | None = None, result: dict | None = None):
     with _tasks_lock:
-        if task_id in _tasks:
-            _tasks[task_id]["state"] = "error" if error else "done"
-            _tasks[task_id]["error"] = error
-            _tasks[task_id]["result"] = result
+        task = _tasks.get(task_id)
+        if task is not None:
+            task["state"] = "error" if error else "done"
+            task["error"] = error
+            task["result"] = result
+    if task is None:
+        return
+    took = time.monotonic() - task.get("started", time.monotonic())
+    if error:
+        print(f"[task] {task_id} ({task.get('kind')}) failed after {took:.1f}s: {error}", flush=True)
+    else:
+        print(f"[task] {task_id} ({task.get('kind')}) done in {took:.1f}s" + (f": {_short(_redact(result))}" if result else ""), flush=True)
 
 
 def _task_progress(task_id: str, progress: int | None = None, file: str | None = None, speed: float | None = None):
@@ -384,6 +455,21 @@ class _SpeedMeter:
         with self._lock:
             self._trim(now)
             return sum(size for _, size in self._samples) / self._window
+
+
+def _progress_logger(prefix: str, step: int = 10):
+    last = {"bucket": -1}
+
+    def log(done: int, total: int, speed: float = 0) -> None:
+        if total <= 0:
+            return
+        bucket = min(100, int(done * 100 / total)) // step * step
+        if bucket <= last["bucket"]:
+            return
+        last["bucket"] = bucket
+        print(f"{prefix} {bucket}% ({done / 1048576:.1f}/{total / 1048576:.1f} MB, {speed / 1048576:.1f} MB/s)", flush=True)
+
+    return log
 
 
 def _lib() -> LibraryService:
@@ -462,22 +548,28 @@ def _version_tuple(v: str) -> tuple[int, ...]:
 
 
 def _check_launcher_update_github(local_version: str) -> dict | None:
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+    print(f"[update] github check: GET {url}, local version {local_version}", flush=True)
     try:
         resp = http.get(
-            f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+            url,
             headers={"Accept": "application/vnd.github+json"},
             timeout=15,
         )
     except Exception as exc:
+        print(f"[update] github check failed: {type(exc).__name__}: {exc}", flush=True)
         return {"ok": False, "error": str(exc)}
     if resp.status_code != 200:
+        print(f"[update] github check failed: HTTP {resp.status_code}: {_short(resp.text or '')}", flush=True)
         return {"ok": False, "error": f"HTTP {resp.status_code}"}
     try:
         data = resp.json()
     except ValueError as exc:
+        print(f"[update] github check: bad json: {exc}", flush=True)
         return {"ok": False, "error": str(exc)}
 
     assets = data.get("assets") or []
+    print(f"[update] github release {data.get('tag_name')}: assets {[a.get('name') for a in assets]}", flush=True)
     asset = next((a for a in assets if str(a.get("name") or "").endswith(".AppImage")), None)
     if not asset:
         return {"ok": False, "error": "no_appimage_asset"}
@@ -488,8 +580,11 @@ def _check_launcher_update_github(local_version: str) -> dict | None:
         try:
             sha_resp = http.get(sha_asset["browser_download_url"], timeout=15)
             sha256 = sha_resp.text.strip().split()[0]
-        except Exception:
+        except Exception as exc:
+            print(f"[update] github sha256 fetch failed: {type(exc).__name__}: {exc}", flush=True)
             sha256 = ""
+    else:
+        print("[update] github release has no .sha256 asset, update will not be verified by hash", flush=True)
 
     remote_version = str(data.get("tag_name") or "").strip().lstrip("vV")
     return {
@@ -533,6 +628,7 @@ def _install_macos_app_update(zip_path: Path, target_app: Path) -> str:
     extract_dir = target_app.parent / f".lota-update-extract-{os.getpid()}"
     shutil.rmtree(extract_dir, ignore_errors=True)
     extract_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[update] macos: extracting {zip_path.name} into {extract_dir}", flush=True)
     try:
         proc = subprocess.run(
             ["/usr/bin/ditto", "-x", "-k", str(zip_path), str(extract_dir)],
@@ -549,10 +645,12 @@ def _install_macos_app_update(zip_path: Path, target_app: Path) -> str:
 
         backup = target_app.with_name(target_app.name + ".old")
         shutil.rmtree(backup, ignore_errors=True)
+        print(f"[update] macos: replacing {target_app} with {new_app.name} (backup {backup.name})", flush=True)
         os.replace(target_app, backup)
         try:
             os.replace(new_app, target_app)
-        except Exception:
+        except Exception as exc:
+            print(f"[update] macos: replace failed, restoring backup: {type(exc).__name__}: {exc}", flush=True)
             os.replace(backup, target_app)
             raise
         shutil.rmtree(backup, ignore_errors=True)
@@ -595,11 +693,12 @@ def update_install():
     if url.startswith("/"):
         url = f"{get_api_base()}{url}"
     if not _trusted_update_url(url):
+        print(f"[update] install rejected: untrusted url {url.split('?', 1)[0]}", flush=True)
         return jsonify({"ok": False, "error": "untrusted_url"}), 400
 
     target_path = _appimage_path() if mode == "appimage" else _macos_app_bundle_path()
-    task_id = _new_task()
-    print(f"[update] install start: version={version} mode={mode}", flush=True)
+    task_id = _new_task(kind="update")
+    print(f"[update] install start: version={version} mode={mode} url={url.split('?', 1)[0]} size={size or '?'} sha256={sha256 or '-'} target={target_path}", flush=True)
 
     def run():
         tmp_path: Path | None = None
@@ -614,8 +713,10 @@ def update_install():
             digest = hashlib.sha256()
             downloaded = 0
             meter = _SpeedMeter()
+            log_progress = _progress_logger("[update] download")
             file_name = Path(url.split("?", 1)[0]).name or "update"
             with http.get(url, stream=True, timeout=120) as resp:
+                print(f"[update] download response: HTTP {resp.status_code}, Content-Length {resp.headers.get('Content-Length') or '?'}, final url {resp.url.split('?', 1)[0]}", flush=True)
                 if resp.status_code != 200:
                     raise RuntimeError(f"HTTP {resp.status_code}")
                 total = int(resp.headers.get("Content-Length") or 0) or size
@@ -633,17 +734,21 @@ def update_install():
                             file=file_name,
                             speed=meter.speed(),
                         )
+                        log_progress(downloaded, total, meter.speed())
             _task_progress(task_id, speed=0)
 
+            actual_sha256 = digest.hexdigest().lower()
+            print(f"[update] downloaded {downloaded} bytes, sha256 {actual_sha256}", flush=True)
             if size and downloaded != size:
                 raise RuntimeError(f"size mismatch: expected {size}, got {downloaded}")
-            if sha256 and digest.hexdigest().lower() != sha256:
+            if sha256 and actual_sha256 != sha256:
                 raise RuntimeError("sha256 mismatch")
 
             if mode == "appimage":
                 mode_bits = tmp_path.stat().st_mode
                 os.chmod(tmp_path, mode_bits | 0o111)
                 os.replace(tmp_path, target_path)
+                print(f"[update] appimage replaced: {target_path}", flush=True)
                 relaunch_path = str(target_path)
                 tmp_path = None
             else:
@@ -706,7 +811,11 @@ _EDITABLE_SETTINGS = {
 def settings_save():
     body = request.json or {}
     settings = load_settings()
-    settings.update({k: v for k, v in body.items() if k in _EDITABLE_SETTINGS})
+    updates = {k: v for k, v in body.items() if k in _EDITABLE_SETTINGS}
+    changes = [f"{k}: {settings.get(k)!r} -> {v!r}" for k, v in updates.items() if str(settings.get(k)) != str(v)]
+    ignored = sorted(k for k in body if k not in _EDITABLE_SETTINGS)
+    print(f"[settings] changed: {'; '.join(changes) or 'nothing'}" + (f" (ignored non-editable keys: {ignored})" if ignored else ""), flush=True)
+    settings.update(updates)
     save_settings(settings)
     set_language(str(settings.get("language") or ""))
     return jsonify({"ok": True})
@@ -731,8 +840,11 @@ def java_version():
     else:
         resolved = path if is_safe_java_path(path) else None
     if not resolved:
+        print(f"[java] version check: {path!r} rejected (not on PATH, not a java executable or not executable)", flush=True)
         return jsonify({"path": path, "major": None, "found": False})
-    return jsonify({"path": path, "major": get_java_major_version(resolved), "found": True})
+    major = get_java_major_version(resolved)
+    print(f"[java] version check: {path!r} -> {resolved}, major {major}", flush=True)
+    return jsonify({"path": path, "major": major, "found": True})
 
 
 @app.get("/java/scan")
@@ -874,9 +986,18 @@ def library_catalog():
         b["_build_key"] = lib.build_key(item)
         builds.append(b)
     settings = load_settings()
+    selected = str(settings.get("selected_build") or "")
+    print(f"[library] catalog ({'fresh' if fresh else 'cached'}): {len(builds)} builds, selected={selected or '-'}", flush=True)
+    for b in builds:
+        print(
+            f"[library]   {b['_build_key']}: id={b.get('id')} version={b.get('version') or '-'} "
+            f"updated_at={lib.expected_build_updated_at(b) or '-'} instance={bool(b.get('is_instance'))} "
+            f"installed={b['_installed']} up_to_date={b['_up_to_date']}",
+            flush=True,
+        )
     return jsonify({
         "builds": builds,
-        "selected_build": str(settings.get("selected_build") or ""),
+        "selected_build": selected,
     })
 
 
@@ -885,6 +1006,7 @@ def library_select():
     body = request.json or {}
     build_key = str(body.get("build_key") or "")
     settings = load_settings()
+    print(f"[library] selected build: {settings.get('selected_build') or '-'} -> {build_key or '-'}", flush=True)
     settings["selected_build"] = build_key
     save_settings(settings)
     return jsonify({"ok": True})
@@ -901,6 +1023,7 @@ def library_download():
     with _tasks_lock:
         existing_task_id = _active_downloads.get(build_key)
         if existing_task_id and _tasks.get(existing_task_id, {}).get("state") == "running":
+            print(f"[library] download already running: build_key={build_key} task={existing_task_id}", flush=True)
             return jsonify({"ok": True, "task_id": existing_task_id})
 
     auth = load_auth_data() or {}
@@ -910,21 +1033,24 @@ def library_download():
     catalog = lib.load_catalog(token)
     item = next((b for b in catalog.builds if lib.build_key(b) == build_key), None)
     if not item:
+        print(f"[library] download rejected: build_key={build_key} not in catalog ({len(catalog.builds)} builds)", flush=True)
         return jsonify({"ok": False, "error": "build_not_found"}), 404
 
     source_item = None
     if item.get("is_instance"):
         source_id = item.get("_source_build_id")
         source_item = next((b for b in catalog.builds if not b.get("is_instance") and b.get("id") == source_id), None)
+        print(f"[library] instance {build_key} uses source build id={source_id}: {'found' if source_item else 'NOT FOUND in catalog'}", flush=True)
 
     task_id = _new_task(kind="download")
     with _tasks_lock:
         _active_downloads[build_key] = task_id
-    print(f"[library] download start: build_key={build_key}", flush=True)
+    print(f"[library] download start: build_key={build_key} build_id={(source_item or item).get('id')} task={task_id} dir={lib.build_install_dir(item)}", flush=True)
 
     def run():
         try:
             meter = _SpeedMeter()
+            log_progress = _progress_logger(f"[library] download {build_key}:")
 
             def on_progress(name: str, delta: int, done: int, total: int):
                 if delta > 0:
@@ -935,13 +1061,14 @@ def library_download():
                     file=name or None,
                     speed=meter.speed(),
                 )
+                log_progress(done, total, meter.speed())
 
             lib.sync_build(item, token=token, source_item=source_item, progress=on_progress)
             _task_progress(task_id, 100, speed=0)
             _task_done(task_id)
             print(f"[library] download done: build_key={build_key}", flush=True)
         except Exception as exc:
-            print(f"[library] download failed: build_key={build_key}: {exc}", flush=True)
+            print(f"[library] download failed: build_key={build_key}: {type(exc).__name__}: {exc}", flush=True)
             _task_done(task_id, str(exc))
         finally:
             with _tasks_lock:
@@ -962,13 +1089,16 @@ def library_delete():
     catalog = lib.load_catalog(token)
     item = next((b for b in catalog.builds if lib.build_key(b) == build_key), None)
     if not item:
+        print(f"[library] delete rejected: build_key={build_key} not in catalog", flush=True)
         return jsonify({"ok": False, "error": "build_not_found"}), 404
-    lib.delete_build_files(item)
-    print(f"[library] build deleted: build_key={build_key}", flush=True)
+    build_dir = lib.build_install_dir(item)
+    removed = lib.delete_build_files(item)
+    print(f"[library] build deleted: build_key={build_key} dir={build_dir} existed={removed}", flush=True)
     settings = load_settings()
     if settings.get("selected_build") == build_key:
         settings["selected_build"] = ""
         save_settings(settings)
+        print(f"[library] selected build cleared because {build_key} was deleted", flush=True)
     return jsonify({"ok": True})
 
 
@@ -1002,6 +1132,7 @@ def library_instance_delete():
     settings = load_settings()
     build_key = f"instance-{target_id}"
     if settings.get("selected_build", "").startswith("instance-"):
+        print(f"[library] selected build {settings.get('selected_build')} cleared after deleting instance {target_id}", flush=True)
         settings["selected_build"] = ""
         save_settings(settings)
     return jsonify({"ok": True})
@@ -1055,18 +1186,9 @@ class _LaunchReport:
         self.lines: list[str] = []
         self.started = time.monotonic()
         self.last = self.started
-        self.hidden: list[str] = []
-
-    def hide(self, path) -> None:
-        for value in {str(path), os.path.realpath(str(path))}:
-            if value and value not in self.hidden:
-                self.hidden.append(value)
-        self.hidden.sort(key=len, reverse=True)
 
     def add(self, text: str, console: bool = True) -> None:
-        for value in self.hidden:
-            text = text.replace(value, "<hidden>")
-        line = f"[launch] {text}"
+        line = _scrub(f"[launch] {text}")
         self.lines.append(line)
         if console:
             print(line, flush=True)
@@ -1147,7 +1269,7 @@ def _report_bundle(report: _LaunchReport, bundle_state) -> None:
     if bundle_state is None:
         report.add("none")
         return
-    report.hide(bundle_state.temp_dir)
+    _hide_path(bundle_state.temp_dir)
     for link in bundle_state.links:
         report.add(f"linked: {link}")
     for original, hidden in bundle_state.hidden:
@@ -1244,6 +1366,7 @@ def play_state():
 def play_start():
     with _play_lock:
         if _play_state["state"] in ("running", "launched"):
+            print(f"[play] start rejected: already {_play_state['state']}", flush=True)
             return jsonify({"ok": False, "error": "already_running"})
 
     def run():
@@ -1260,7 +1383,10 @@ def play_start():
 
         def set_status(msg):
             with _play_lock:
+                changed = _play_state.get("status") != msg
                 _play_state["status"] = msg
+            if changed:
+                print(f"[play] status: {msg}", flush=True)
 
         def set_progress(done, total=None):
             if total is not None and total > 0:
@@ -1291,7 +1417,7 @@ def play_start():
             print(f"[play] build selected: {build_key}", flush=True)
             report.step("build check")
 
-            from services.play_service import resolve_custom_java, system_openal_jvm_args
+            from services.play_service import prefer_high_performance_gpu, resolve_custom_java, system_openal_jvm_args
             custom_java = str(settings.get("java_path") or "").strip()
             if settings.get("auto_java_version", True) or not custom_java:
                 java_mode = "auto (launcher Oracle JDK 21)" if settings.get("auto_java_version", True) else "auto (no custom path set)"
@@ -1314,7 +1440,7 @@ def play_start():
                 game_dir = get_data_dir() / "minecraft"
 
             _report_build(report, build_key, game_dir)
-            bundle_state = service.prepare_bundle_files(game_dir)
+            bundle_state = service.prepare_bundle_files(game_dir, hide=_hide_path)
             _report_bundle(report, bundle_state)
             report.step("protected content ready")
             try:
@@ -1347,6 +1473,8 @@ def play_start():
 
                 argv = spec.argv + (bundle_state.game_args if bundle_state else [])
                 report.section("launch")
+                for line in prefer_high_performance_gpu(java_path):
+                    report.add(f"gpu preference: {line}")
                 report.add(f"player: {username}")
                 report.add(f"memory: -Xms{mem_min}M -Xmx{mem_max}M")
                 report.add(f"user jvm args: {settings.get('jvm_args') or '-'}")
@@ -1375,7 +1503,7 @@ def play_start():
                 def _pipe_mc_logs():
                     with log_path.open("a", encoding="utf-8") as log_file:
                         for line in proc.stdout:
-                            clean = line.rstrip()
+                            clean = _scrub(line.rstrip())
                             _log_append("[MC] " + clean, persist=False)
                             log_file.write(clean + "\n")
                             if any(marker in clean for marker in _MOD_FAILURE_MARKERS):
@@ -1413,14 +1541,14 @@ def play_start():
             report.add(f"FAILED after {time.monotonic() - report.started:.2f}s: {type(exc).__name__}: {exc}")
             import traceback
             for line in traceback.format_exc().splitlines():
-                report.add(line, console=False)
+                report.add(line)
             failed_log = get_data_dir() / "logs" / f"launch_failed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
             failed_log.parent.mkdir(parents=True, exist_ok=True)
             report.write_to(failed_log)
             _prune_launcher_logs()
             print(f"[launch] report saved: {failed_log}", flush=True)
             with _play_lock:
-                _play_state.update({"state": "error", "error": _friendly_play_error(exc)})
+                _play_state.update({"state": "error", "error": _scrub(_friendly_play_error(exc))})
         finally:
             set_download_listener(None)
             _play_meter = None
@@ -1485,7 +1613,9 @@ def _save_cached_news(items: list) -> None:
 @app.get("/news")
 def news():
     if request.args.get("fresh") != "1":
-        return jsonify({"ok": True, "items": _load_cached_news()})
+        items = _load_cached_news()
+        print(f"[news] served {len(items)} cached items", flush=True)
+        return jsonify({"ok": True, "items": items})
 
     auth = load_auth_data() or {}
     token = str(auth.get("token") or "")
@@ -1498,9 +1628,12 @@ def news():
             items = list(manifest.get("items") or []) if isinstance(manifest, dict) else []
             items.sort(key=lambda x: _parse_news_date(x.get("date")), reverse=True)
             _save_cached_news(items)
+            print(f"[news] fetched {len(items)} items: " + ", ".join(f"{x.get('date')} {x.get('title')!r}" for x in items[:10] if isinstance(x, dict)), flush=True)
             return jsonify({"ok": True, "items": items})
+        print(f"[news] fetch failed: HTTP {r.status_code}", flush=True)
         return jsonify({"ok": False, "items": [], "status": r.status_code})
-    except Exception:
+    except Exception as exc:
+        print(f"[news] fetch failed: {type(exc).__name__}: {exc}", flush=True)
         return jsonify({"ok": False, "items": [], "error": "conn_refused"})
 
 
@@ -1523,9 +1656,11 @@ def news_image():
         if r.status_code == 200:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             cache_path.write_bytes(r.content)
+            print(f"[news] image cached: {rel_path} ({len(r.content)} bytes)", flush=True)
             return Response(r.content, content_type=r.headers.get("Content-Type", "image/png"))
-    except Exception:
-        pass
+        print(f"[news] image {rel_path} not available: HTTP {r.status_code}", flush=True)
+    except Exception as exc:
+        print(f"[news] image {rel_path} failed: {type(exc).__name__}: {exc}", flush=True)
     return Response(status=404)
 
 
@@ -1639,10 +1774,13 @@ def _ensure_skin_cached() -> None:
         if _skin_sync_attempted:
             return
         _skin_sync_attempted = True
+    print("[skin] no local skin.png, syncing from server", flush=True)
     try:
-        _sync_skin_from_server()
-    except Exception:
-        pass
+        result = _sync_skin_from_server()
+    except Exception as exc:
+        print(f"[skin] sync crashed: {type(exc).__name__}: {exc}", flush=True)
+        return
+    print(f"[skin] sync result: {_short(result)}", flush=True)
 
 
 @app.get("/skin/head")
@@ -1662,7 +1800,9 @@ def skin_head():
             hat = skin.crop((40, 8, 48, 16)).resize((size, size), PilImage.NEAREST)
             if hat.getbbox():
                 head.paste(hat, (0, 0), hat)
-    except Exception:
+    except Exception as exc:
+        if not isinstance(exc, FileNotFoundError):
+            print(f"[skin] head render failed, using placeholder: {type(exc).__name__}: {exc}", flush=True)
         from PIL import Image as PilImage
         head = PilImage.new("RGBA", (size, size), (106, 127, 153, 255))
     buf = io.BytesIO()
@@ -1809,7 +1949,9 @@ def skin_model():
         final = PilImage.new("RGBA", (width, height), (0, 0, 0, 0))
         final.paste(canvas, ((width - total_w) // 2, (height - total_h) // 2), canvas)
 
-    except Exception:
+    except Exception as exc:
+        if not isinstance(exc, FileNotFoundError):
+            print(f"[skin] model render failed, using empty image: {type(exc).__name__}: {exc!r}", flush=True)
         final = PilImage.new("RGBA", (width, height), (0, 0, 0, 0))
 
     buf = io.BytesIO()
@@ -1828,32 +1970,41 @@ def account_skin_upload():
     if model not in ("classic", "slim"):
         model = "classic"
     if not file:
+        print("[account] skin upload rejected: no file in request", flush=True)
         return jsonify({"ok": False, "error": "no_file"}), 400
 
     data = file.read()
+    print(f"[account] skin upload: {file.filename!r}, {len(data)} bytes, model={model}", flush=True)
     if not data:
+        print("[account] skin upload rejected: empty file", flush=True)
         return jsonify({"ok": False, "error": "no_file"}), 400
     if len(data) > _SKIN_MAX_BYTES:
+        print(f"[account] skin upload rejected: {len(data)} bytes > {_SKIN_MAX_BYTES}", flush=True)
         return jsonify({"ok": False, "error": "skin_too_large"})
     if not data.startswith(b"\x89PNG"):
+        print(f"[account] skin upload rejected: not a png (header {data[:8]!r})", flush=True)
         return jsonify({"ok": False, "error": "skin_bad_format"})
 
     try:
         from PIL import Image as PilImage
         img = PilImage.open(io.BytesIO(data))
         if img.width != 64 or img.height not in (32, 64):
+            print(f"[account] skin upload rejected: dimensions {img.width}x{img.height}", flush=True)
             return jsonify({"ok": False, "error": "skin_bad_dimensions"})
-    except Exception:
+    except Exception as exc:
+        print(f"[account] skin upload rejected: png decode failed: {type(exc).__name__}: {exc}", flush=True)
         return jsonify({"ok": False, "error": "skin_bad_format"})
 
     skin_path = get_data_dir() / "skin.png"
     skin_path.parent.mkdir(parents=True, exist_ok=True)
     skin_path.write_bytes(data)
     save_skin_model(model)
+    print(f"[account] skin saved locally: {skin_path} ({img.width}x{img.height}, {model})", flush=True)
 
     auth = load_auth_data() or {}
     token = str(auth.get("token") or "").strip()
     if not token:
+        print("[account] skin not uploaded: not logged in", flush=True)
         return jsonify({"ok": True, "saved": True, "uploaded": False})
 
     try:
@@ -1911,8 +2062,21 @@ def _install_desktop_entry_if_appimage() -> None:
 
         base = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else Path(__file__).parent
         install_desktop_entry(Path(appimage_path), base / "assets" / "logo.png")
-    except Exception:
-        pass
+        print(f"[backend] desktop entry installed for {appimage_path}", flush=True)
+    except Exception as exc:
+        print(f"[backend] desktop entry install failed: {type(exc).__name__}: {exc}", flush=True)
+
+
+def _log_startup(port: int) -> None:
+    from auth.api_base import get_api_candidates
+    print(f"[backend] started: pid={os.getpid()} port={port} log={get_data_dir() / 'launcher.log'}", flush=True)
+    print(f"[backend] os: {platform.platform()} ({platform.machine()}), python {sys.version.split()[0]}, frozen={bool(getattr(sys, 'frozen', False))}", flush=True)
+    print(f"[backend] data dir: {get_data_dir()}", flush=True)
+    print(f"[backend] update channel: {UPDATE_CHANNEL}, update mode: {_update_mode() or '-'}", flush=True)
+    print(f"[backend] api candidates: {', '.join(get_api_candidates())}", flush=True)
+    print(f"[backend] settings: {_short(_redact(load_settings()))}", flush=True)
+    auth = load_auth_data() or {}
+    print(f"[backend] auth: username={auth.get('username') or '-'} status={auth.get('status') or '-'} sub_level={auth.get('sub_level', '-')} token={'set' if auth.get('token') else 'none'}", flush=True)
 
 
 if __name__ == "__main__":
@@ -1928,6 +2092,10 @@ if __name__ == "__main__":
     port_file.write_text(str(port))
 
     print(f"PORT:{port}", flush=True)
+    try:
+        _log_startup(port)
+    except Exception as exc:
+        print(f"[backend] startup info failed: {type(exc).__name__}: {exc}", flush=True)
     threading.Thread(target=_install_desktop_entry_if_appimage, daemon=True).start()
     try:
         app.run(host="127.0.0.1", port=port, threaded=True)
