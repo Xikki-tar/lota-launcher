@@ -53,7 +53,17 @@ fn windows_updater_bootstrap() -> bool {
     !matches!(child.try_wait(), Ok(Some(status)) if !status.success())
 }
 
+#[cfg(target_os = "linux")]
+fn linux_disable_webkit_dmabuf() {
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+}
+
 fn main() {
+    #[cfg(target_os = "linux")]
+    linux_disable_webkit_dmabuf();
+
     #[cfg(target_os = "windows")]
     {
         if windows_updater_bootstrap() {

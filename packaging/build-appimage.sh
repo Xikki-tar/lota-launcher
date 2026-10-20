@@ -13,7 +13,7 @@ if [ -z "$RUST_TARGET_TRIPLE" ]; then
   exit 1
 fi
 
-echo "=== 1/4: Python-окружение ==="
+echo "=== 1/5: Python-окружение ==="
 if [ ! -d "$ROOT_DIR/.venv" ]; then
   python3 -m venv "$ROOT_DIR/.venv"
 fi
@@ -22,7 +22,7 @@ source "$ROOT_DIR/.venv/bin/activate"
 pip install --quiet -r "$ROOT_DIR/requirements.txt"
 pip install --quiet pyinstaller
 
-echo "=== 2/4: Сборка backend.py в бинарник (PyInstaller) ==="
+echo "=== 2/5: Сборка backend.py в бинарник (PyInstaller) ==="
 rm -rf "$PY_BUILD_DIR"
 pyinstaller "$ROOT_DIR/backend.py" \
   --name backend \
@@ -39,7 +39,7 @@ mkdir -p "$BIN_DIR"
 cp "$PY_BUILD_DIR/dist/backend" "$BIN_DIR/backend-$RUST_TARGET_TRIPLE"
 chmod +x "$BIN_DIR/backend-$RUST_TARGET_TRIPLE"
 
-echo "=== 3/4: Зависимости фронтенда ==="
+echo "=== 3/5: Зависимости фронтенда ==="
 if [ ! -d "$APP_DIR/node_modules" ]; then
   (cd "$APP_DIR" && npm install)
 fi
@@ -59,7 +59,39 @@ patch_gtk_plugin_for_builtin_pixbuf_loaders() {
   echo "→ Пропатчен linuxdeploy-plugin-gtk.sh под builtin gdk-pixbuf лоадеры"
 }
 
-echo "=== 4/4: Сборка Tauri AppImage ==="
+strip_bundled_wayland_libs() {
+  local appimage="$1"
+  local work_dir="$ROOT_DIR/build/appimage-repack"
+  local app_dir="$work_dir/squashfs-root"
+  local arch
+  arch="$(uname -m)"
+  local tool_dir="${XDG_CACHE_HOME:-$HOME/.cache}/tauri"
+  local appimagetool="$tool_dir/appimagetool-$arch.AppImage"
+
+  rm -rf "$work_dir"
+  mkdir -p "$work_dir" "$tool_dir"
+  (cd "$work_dir" && "$appimage" --appimage-extract >/dev/null)
+
+  local removed
+  removed="$(find "$app_dir" -name 'libwayland-*.so*' -print -delete)"
+  if [ -z "$removed" ]; then
+    echo "→ libwayland в $(basename "$appimage") не найден, пересборка не нужна"
+    rm -rf "$work_dir"
+    return 0
+  fi
+  echo "$removed" | sed "s|^$app_dir/|→ Удалён |"
+
+  if [ ! -x "$appimagetool" ]; then
+    curl -fL --retry 3 -o "$appimagetool" \
+      "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-$arch.AppImage"
+    chmod +x "$appimagetool"
+  fi
+
+  ARCH="$arch" APPIMAGE_EXTRACT_AND_RUN=1 "$appimagetool" --no-appstream "$app_dir" "$appimage"
+  rm -rf "$work_dir"
+}
+
+echo "=== 4/5: Сборка Tauri AppImage ==="
 if ! (cd "$APP_DIR" && npm run tauri build -- --bundles appimage --verbose); then
   echo "→ Первая попытка не удалась, патчим linuxdeploy-plugin-gtk.sh на всякий случай и пробуем снова..."
   patch_gtk_plugin_for_builtin_pixbuf_loaders
@@ -67,6 +99,12 @@ if ! (cd "$APP_DIR" && npm run tauri build -- --bundles appimage --verbose); the
 fi
 
 APPIMAGE_DIR="$TAURI_DIR/target/release/bundle/appimage"
+
+echo "=== 5/5: Удаление встроенных libwayland из AppImage ==="
+while IFS= read -r -d '' appimage; do
+  strip_bundled_wayland_libs "$appimage" </dev/null
+done < <(find "$APPIMAGE_DIR" -maxdepth 1 -iname "*.AppImage" -print0)
+
 echo ""
 echo "✓ Готово:"
 find "$APPIMAGE_DIR" -maxdepth 1 -iname "*.AppImage"
