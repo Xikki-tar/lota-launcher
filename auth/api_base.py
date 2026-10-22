@@ -140,11 +140,11 @@ def resolve_fastest_api_base(*, force_refresh: bool = False, timeout: float = DE
                 best_url = url
                 best_latency = latency
 
-    if not best_url:
-        print(f"[api] all candidates failed: {'; '.join(errors)}", flush=True)
-        raise RuntimeError("All API candidates failed: " + "; ".join(errors))
-
-    print(f"[api] resolved {best_url} ({best_latency * 1000:.0f}ms)", flush=True)
+    if best_url:
+        print(f"[api] resolved {best_url} ({best_latency * 1000:.0f}ms)", flush=True)
+    else:
+        best_url = candidates[0]
+        print(f"[api] all probes failed ({'; '.join(errors)}), falling back to {best_url}", flush=True)
     with _api_base_cache_lock:
         _api_base_cache_value = best_url
         _api_base_cache_until = time.monotonic() + DEFAULT_CACHE_TTL_SECONDS

@@ -207,7 +207,6 @@ def _open_launcher_log():
 
 _log_file = _open_launcher_log()
 _prune_launcher_logs()
-drop_saved_default_api_bases()
 
 _HTTP_SECRET_KEYS = {"token", "code", "key", "download_token", "link_token", "access_token", "password", "telegram_url"}
 _HTTP_QUIET_PATHS = ("/api/build/unit",)
@@ -2067,6 +2066,27 @@ def _install_desktop_entry_if_appimage() -> None:
         print(f"[backend] desktop entry install failed: {type(exc).__name__}: {exc}", flush=True)
 
 
+def _launcher_work_pending() -> bool:
+    with _play_lock:
+        playing = _play_state.get("state") in ("running", "launched")
+    with _tasks_lock:
+        downloading = any(t.get("kind") == "download" and t.get("state") == "running" for t in _tasks.values())
+    return playing or downloading
+
+
+def _exit_when_launcher_closes() -> None:
+    try:
+        while sys.stdin.buffer.read(4096):
+            pass
+    except (OSError, ValueError):
+        pass
+    print("[backend] launcher closed, exiting after the game and downloads finish", flush=True)
+    while _launcher_work_pending():
+        time.sleep(2)
+    print("[backend] exiting", flush=True)
+    os._exit(0)
+
+
 def _log_startup(port: int) -> None:
     from auth.api_base import get_api_candidates
     print(f"[backend] started: pid={os.getpid()} port={port} log={get_data_dir() / 'launcher.log'}", flush=True)
@@ -2092,11 +2112,14 @@ if __name__ == "__main__":
     port_file.write_text(str(port))
 
     print(f"PORT:{port}", flush=True)
+    drop_saved_default_api_bases()
     try:
         _log_startup(port)
     except Exception as exc:
         print(f"[backend] startup info failed: {type(exc).__name__}: {exc}", flush=True)
     threading.Thread(target=_install_desktop_entry_if_appimage, daemon=True).start()
+    if os.environ.get("LOTA_EXIT_ON_STDIN_CLOSE") == "1" and sys.stdin is not None:
+        threading.Thread(target=_exit_when_launcher_closes, daemon=True).start()
     try:
         app.run(host="127.0.0.1", port=port, threaded=True)
     finally:
