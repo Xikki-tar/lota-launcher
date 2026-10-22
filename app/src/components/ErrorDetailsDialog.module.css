@@ -1,0 +1,115 @@
+@keyframes overlayIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes dialogIn  { from { opacity: 0; transform: scale(0.94) translateY(6px); }
+                       to   { opacity: 1; transform: scale(1)    translateY(0);    } }
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(7, 5, 3, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 200;
+  animation: overlayIn 180ms ease both;
+}
+
+.dialog {
+  background: linear-gradient(135deg, #17120E 0%, #1E1610 100%);
+  border: 1px solid #2E2014;
+  border-radius: 18px;
+  padding: 20px;
+  width: 100%;
+  max-width: 640px;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7);
+  animation: dialogIn 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 1.0px;
+  text-transform: uppercase;
+  color: #9C8368;
+}
+
+.message {
+  font-size: 14px;
+  color: #fca5a5;
+  line-height: 1.5;
+}
+
+.details {
+  flex: 1;
+  outline: none;
+  min-height: 0;
+  max-height: 360px;
+  overflow: auto;
+  margin: 0;
+  padding: 10px 12px;
+  background: #0A0806;
+  border: 1px solid #2A1E14;
+  border-radius: 10px;
+  font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #CBB79E;
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: text;
+}
+
+.details:focus-visible {
+  border-color: rgba(245, 180, 73, 0.6);
+}
+
+.btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.btnCopy,
+.btnSecondary {
+  flex: 1 1 140px;
+  padding: 8px 14px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+  min-height: 36px;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.btnCopy {
+  background: rgba(245, 180, 73, 0.18);
+  border: 1px solid rgba(245, 180, 73, 0.5);
+  color: #F5B449;
+}
+
+.btnCopy:hover {
+  background: rgba(245, 180, 73, 0.28);
+  border-color: rgba(245, 180, 73, 0.8);
+}
+
+.btnCopy:focus-visible,
+.btnSecondary:focus-visible {
+  outline: 2px solid rgba(245, 180, 73, 0.8);
+  outline-offset: 2px;
+}
+
+.btnSecondary {
+  background: transparent;
+  border: 1px solid rgba(74, 53, 35, 0.45);
+  color: #9C8368;
+}
+
+.btnSecondary:hover {
+  background: rgba(42, 30, 22, 0.45);
+  border-color: rgba(233, 163, 68, 0.55);
+  color: #CBB79E;
+}

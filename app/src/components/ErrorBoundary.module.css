@@ -1,0 +1,83 @@
+.root {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 32px;
+  background: #0B0A08;
+  color: #F18A80;
+}
+
+.title {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.message {
+  max-width: 600px;
+  font-size: 12px;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.trace {
+  max-width: 600px;
+  max-height: 200px;
+  margin: 0;
+  overflow: auto;
+  font-size: 10px;
+  color: rgba(240, 100, 100, 0.5);
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: text;
+}
+
+.btns {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.btnRetry,
+.btnReload {
+  min-height: 36px;
+  padding: 8px 16px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.btnRetry {
+  background: rgba(245, 180, 73, 0.18);
+  border: 1px solid rgba(245, 180, 73, 0.5);
+  color: #F5B449;
+}
+
+.btnRetry:hover {
+  background: rgba(245, 180, 73, 0.28);
+  border-color: rgba(245, 180, 73, 0.8);
+}
+
+.btnReload {
+  background: transparent;
+  border: 1px solid rgba(74, 53, 35, 0.45);
+  color: #9C8368;
+}
+
+.btnReload:hover {
+  background: rgba(42, 30, 22, 0.45);
+  border-color: rgba(233, 163, 68, 0.55);
+  color: #CBB79E;
+}
+
+.btnRetry:focus-visible,
+.btnReload:focus-visible {
+  outline: 2px solid rgba(245, 180, 73, 0.8);
+  outline-offset: 2px;
+}

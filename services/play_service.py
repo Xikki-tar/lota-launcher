@@ -1,8 +1,10 @@
 import base64
+import hashlib
 import io
 import json
 import os
 import platform
+import re
 import secrets
 import shutil
 import subprocess
@@ -36,6 +38,7 @@ from services.build_sync import (
     remove_link,
 )
 from services.library_service import LibraryService
+from services.play_errors import JavaError, PlayError
 from desktop_integration import windows_hidden_subprocess_kwargs
 from window.i18n import t
 
@@ -141,6 +144,9 @@ def _creationflags_no_window() -> int:
 
 
 MIN_JAVA_MAJOR = 17
+GRAALVM_DIR = "graalvm-21"
+LEGACY_ORACLE_JDK_DIR = "oracle-jdk-21"
+GRAALVM_CE_21_VERSION = "21.0.2"
 SYSTEM_OPENAL_CANDIDATES = (
     "/usr/lib/libopenal.so.1",
     "/usr/lib64/libopenal.so.1",
@@ -195,10 +201,13 @@ def resolve_custom_java(java_path: str) -> str:
     if java_path.lower() in JAVA_EXECUTABLE_NAMES:
         java_path = shutil.which(java_path) or ""
     if not java_path or not is_safe_java_path(java_path):
-        raise RuntimeError(t("play_error_java"))
+        raise JavaError(t("play_error_java"), java_path)
     major = get_java_major_version(java_path)
     if major is not None and major < MIN_JAVA_MAJOR:
-        raise RuntimeError(t("play_error_java_old").format(major=major, required=MIN_JAVA_MAJOR))
+        raise JavaError(
+            t("play_error_java_old").format(major=major, required=MIN_JAVA_MAJOR),
+            f"{java_path}: {get_java_version(java_path)}",
+        )
     return java_path
 
 
@@ -291,7 +300,7 @@ class PlayWorker(QThread):
                 progress=on_download_progress,
                 allow_build_update=self.allow_build_update,
             )
-            java_path = play_service.ensure_oracle_java_21(status=self.status.emit, progress=on_download_progress)
+            java_path = play_service.ensure_graalvm_21(status=self.status.emit, progress=on_download_progress)
 
             settings = load_settings()
             if not java_path:
@@ -553,7 +562,7 @@ class PlayService:
         builds = [item for item in catalog.builds if isinstance(item, dict) and not item.get("is_instance")]
         if not builds:
             print("[play] no builds in the catalog", flush=True)
-            raise RuntimeError(t("play_error_build_unavailable"))
+            raise PlayError(t("play_error_build_unavailable"), kind="build")
         latest = max(builds, key=self._build_latest_sort_key)
         build_key = library_service.build_key(latest)
         print(f"[play] latest build: {build_key} (id {latest.get('id')})", flush=True)
@@ -607,12 +616,12 @@ class PlayService:
     ) -> None:
         if not token:
             print("[play] build download impossible: not logged in", flush=True)
-            raise RuntimeError(t("play_error_build_auth"))
+            raise PlayError(t("play_error_build_auth"), kind="auth")
         try:
             int((source_item or item).get("id"))
-        except Exception:
+        except (TypeError, ValueError) as exc:
             print(f"[play] build download impossible: bad build id {(source_item or item).get('id')!r}", flush=True)
-            raise RuntimeError(t("play_error_build_unavailable"))
+            raise PlayError(t("play_error_build_unavailable"), f"build id: {(source_item or item).get('id')!r}", kind="build") from exc
 
         if status:
             status(t("play_status_build_download"))
@@ -625,9 +634,9 @@ class PlayService:
 
         library_service.sync_build(item, token=token, source_item=source_item, progress=on_progress)
 
-    def ensure_oracle_java_21(self, status=None, progress=None) -> str:
-        current = self._oracle_java_executable()
-        executable = bool(current) and _is_executable(str(current))
+    def ensure_graalvm_21(self, status=None, progress=None) -> str:
+        current = self._graalvm_executable()
+        executable = _is_executable(str(current))
         version = get_java_version(str(current)) if executable else "missing"
         if executable and _java_version_is_21(version):
             print(f"[java] launcher JDK ready: {current} ({version})", flush=True)
@@ -637,49 +646,75 @@ class PlayService:
         print(f"[java] launcher JDK 21 not usable at {current} ({version}), downloading", flush=True)
         if status:
             status(t("play_status_java_download"))
-        url, archive_kind = self._oracle_java_download()
         java_root = get_data_dir() / "java"
         downloads_dir = get_data_dir() / "downloads"
-        runtime_dir = java_root / "oracle-jdk-21"
-        staging_dir = java_root / "oracle-jdk-21.tmp"
-        archive_path = downloads_dir / Path(url).name
         java_root.mkdir(parents=True, exist_ok=True)
         downloads_dir.mkdir(parents=True, exist_ok=True)
+
+        failures = []
+        for url in self._graalvm_21_urls():
+            try:
+                self._install_java_archive(url, java_root, downloads_dir, status=status, progress=progress)
+                break
+            except Exception as exc:
+                failures.append(f"{url}\n  {type(exc).__name__}: {exc}")
+        else:
+            raise JavaError(t("play_error_java_download"), "\n".join(failures))
+
+        current = self._graalvm_executable()
+        if get_java_major_version(str(current)) != 21:
+            print(f"[java] installed JDK is not usable: {current}", flush=True)
+            raise JavaError(t("play_error_java_start"), f"{current}: {get_java_version(str(current))}")
+        print(f"[java] launcher JDK installed: {current} ({get_java_version(str(current))})", flush=True)
+        shutil.rmtree(java_root / LEGACY_ORACLE_JDK_DIR, ignore_errors=True)
+        self._save_java_path(current)
+        if status:
+            status(t("play_status_java_ready"))
+        return str(current)
+
+    def _install_java_archive(self, url: str, java_root: Path, downloads_dir: Path, status=None, progress=None) -> None:
+        expected_sha256 = self._fetch_sha256(url)
+        archive_path = downloads_dir / Path(url).name
+        runtime_dir = java_root / GRAALVM_DIR
+        staging_dir = java_root / f"{GRAALVM_DIR}.tmp"
         shutil.rmtree(staging_dir, ignore_errors=True)
         staging_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            self._download_file(url, archive_path, progress=progress)
+            actual_sha256 = self._download_file(url, archive_path, progress=progress)
+            if actual_sha256 != expected_sha256:
+                raise RuntimeError(f"sha256 mismatch: expected {expected_sha256}, got {actual_sha256}")
             if status:
                 status(t("play_status_java_extract"))
-            if archive_kind == "zip":
+            if url.endswith(".zip"):
                 _safe_extract_zip(archive_path, staging_dir)
             else:
                 _safe_extract_tar(archive_path, staging_dir)
             java_exe = self._find_extracted_java(staging_dir)
             if not java_exe:
                 print(f"[java] no bin/java found in extracted {archive_path.name}", flush=True)
-                raise RuntimeError(t("play_error_java"))
+                raise RuntimeError("java executable not found in archive")
             jdk_home = java_exe.parent.parent
             print(f"[java] installing {jdk_home.name} into {runtime_dir}", flush=True)
             shutil.rmtree(runtime_dir, ignore_errors=True)
             shutil.move(str(jdk_home), str(runtime_dir))
         finally:
             shutil.rmtree(staging_dir, ignore_errors=True)
+            archive_path.unlink(missing_ok=True)
 
-        current = self._oracle_java_executable()
-        if not current or not _is_executable(str(current)):
-            print(f"[java] installed JDK is not executable: {current}", flush=True)
-            raise RuntimeError(t("play_error_java"))
-        print(f"[java] launcher JDK installed: {current} ({get_java_version(str(current))})", flush=True)
-        self._save_java_path(current)
-        if status:
-            status(t("play_status_java_ready"))
-        return str(current)
+    def _fetch_sha256(self, url: str) -> str:
+        response = requests.get(f"{url}.sha256", timeout=30)
+        if response.status_code != 200:
+            raise RuntimeError(f"sha256 file: HTTP {response.status_code}")
+        value = (response.text.split() or [""])[0].lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", value):
+            raise RuntimeError("sha256 file: invalid content")
+        return value
 
-    def _download_file(self, url: str, dest: Path, progress=None) -> None:
+    def _download_file(self, url: str, dest: Path, progress=None) -> str:
         print(f"[download] GET {url} -> {dest}", flush=True)
         started = time.monotonic()
+        digest = hashlib.sha256()
         with requests.get(url, stream=True, timeout=120) as response:
             if response.status_code != 200:
                 print(f"[download] {url} failed: HTTP {response.status_code}", flush=True)
@@ -691,35 +726,40 @@ class PlayService:
                     if not chunk:
                         continue
                     output.write(chunk)
+                    digest.update(chunk)
                     downloaded += len(chunk)
                     report_download_bytes(dest.name, len(chunk))
                     if progress and total > 0:
                         progress(max(0, min(100, int(downloaded * 100 / total))))
         print(f"[download] {dest.name}: {downloaded} of {total or '?'} bytes in {time.monotonic() - started:.1f}s", flush=True)
+        return digest.hexdigest()
 
-    def _oracle_java_download(self) -> tuple[str, str]:
+    def _graalvm_21_urls(self) -> list[str]:
         system = platform.system()
-        machine = platform.machine().lower()
-        is_arm = machine in {"arm64", "aarch64"}
+        arch = "aarch64" if platform.machine().lower() in {"arm64", "aarch64"} else "x64"
         if system == "Windows":
-            if is_arm:
-                raise RuntimeError(t("play_error_java_platform"))
-            return "https://download.oracle.com/java/21/latest/jdk-21_windows-x64_bin.zip", "zip"
-        if system == "Darwin":
-            arch = "aarch64" if is_arm else "x64"
-            return f"https://download.oracle.com/java/21/latest/jdk-21_macos-{arch}_bin.tar.gz", "tar.gz"
-        if system == "Linux":
-            arch = "aarch64" if is_arm else "x64"
-            return f"https://download.oracle.com/java/21/latest/jdk-21_linux-{arch}_bin.tar.gz", "tar.gz"
-        raise RuntimeError(t("play_error_java_platform"))
+            if arch != "x64":
+                raise JavaError(t("play_error_java_platform"))
+            suffix = "windows-x64_bin.zip"
+        elif system == "Darwin":
+            suffix = f"macos-{arch}_bin.tar.gz"
+        elif system == "Linux":
+            suffix = f"linux-{arch}_bin.tar.gz"
+        else:
+            raise JavaError(t("play_error_java_platform"))
+        ce = GRAALVM_CE_21_VERSION
+        return [
+            f"https://download.oracle.com/graalvm/21/latest/graalvm-jdk-21_{suffix}",
+            f"https://github.com/graalvm/graalvm-ce-builds/releases/download/jdk-{ce}/graalvm-community-jdk-{ce}_{suffix}",
+        ]
 
-    def _oracle_java_executable(self) -> Path:
+    def _graalvm_executable(self) -> Path:
         exe = "java.exe" if platform.system() == "Windows" else "java"
-        return get_data_dir() / "java" / "oracle-jdk-21" / "bin" / exe
+        return get_data_dir() / "java" / GRAALVM_DIR / "bin" / exe
 
     def _find_extracted_java(self, root: Path) -> Path | None:
         exe = "java.exe" if platform.system() == "Windows" else "java"
-        for path in root.rglob(exe):
+        for path in sorted(root.rglob(exe), key=lambda p: len(p.parts)):
             if path.parent.name.lower() == "bin":
                 try:
                     if platform.system() != "Windows":
@@ -737,14 +777,14 @@ class PlayService:
     def bundle_manifest_path(self, game_dir: Path) -> Path:
         return game_dir / "cache" / "payload.json"
 
-    def request_bundle_key(self, build_id: int) -> bytes | None:
+    def request_bundle_key(self, build_id: int) -> bytes:
         auth = load_auth_data() or {}
         token = str(auth.get("token") or "").strip()
         if not token:
             print("[bundle] key request skipped: no token", flush=True)
-            return None
+            raise PlayError(t("play_error_build_auth"), kind="auth")
+        base = get_api_base()
         try:
-            base = get_api_base()
             response = requests.post(
                 f"{base}/api/bundle/key",
                 json={"token": token, "build_id": build_id},
@@ -752,17 +792,31 @@ class PlayService:
             )
         except Exception as exc:
             print(f"[bundle] key request failed: {type(exc).__name__}: {exc}", flush=True)
-            return None
-        data = response.json() if response.headers.get("Content-Type", "").startswith("application/json") else None
+            raise
+        try:
+            data = response.json()
+        except ValueError:
+            data = None
+        error = str(data.get("error") or "") if isinstance(data, dict) else ""
+        details = f"bundle key: HTTP {response.status_code} {error}".strip()
         if response.status_code != 200 or not isinstance(data, dict) or not data.get("ok"):
             reason = data.get("error") if isinstance(data, dict) else (response.text or "")[:200]
             print(f"[bundle] key request rejected by {base}: HTTP {response.status_code}, build {build_id}: {reason}", flush=True)
-            return None
+        if response.status_code == 401:
+            raise PlayError(t("play_error_session"), details, kind="auth")
+        if response.status_code == 403:
+            raise PlayError(t("play_error_build_forbidden"), details, kind="build")
+        if response.status_code >= 500 or response.status_code == 429:
+            raise PlayError(t("play_error_server"), details, kind="server")
+        if response.status_code != 200 or not isinstance(data, dict) or not data.get("ok"):
+            raise PlayError(t("play_bundle_key_error"), details, kind="server")
         try:
-            key = base64.b64decode(data.get("key") or "")
-        except Exception as exc:
+            key = base64.b64decode(data.get("key") or "", validate=True)
+        except ValueError as exc:
             print(f"[bundle] key for build {build_id} is not valid base64: {type(exc).__name__}", flush=True)
-            return None
+            raise PlayError(t("play_bundle_key_error"), "bundle key: invalid base64", kind="server") from exc
+        if len(key) not in (16, 24, 32):
+            raise PlayError(t("play_bundle_key_error"), f"bundle key: unexpected length {len(key)}", kind="server")
         print(f"[bundle] key received for build {build_id} ({len(key) * 8}-bit)", flush=True)
         return key
 
@@ -844,14 +898,12 @@ class PlayService:
             return None
         try:
             build_id = legacy[1] if legacy else int(load_state(game_dir).get("build_id"))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as exc:
             print("[bundle] protected content present but build id is unknown", flush=True)
-            raise RuntimeError(t("play_bundle_key_error"))
+            raise PlayError(t("play_error_build_broken"), f"build state: {game_dir}", kind="build") from exc
         print(f"[bundle] build {build_id}: {len(closed)} closed units" + (", legacy archive" if legacy else ""), flush=True)
 
         key32 = self.request_bundle_key(build_id)
-        if not key32:
-            raise RuntimeError(t("play_bundle_key_error"))
 
         state = BundleState(
             temp_dir=Path(tempfile.mkdtemp(prefix="")),

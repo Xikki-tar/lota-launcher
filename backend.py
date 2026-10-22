@@ -7,12 +7,13 @@ import secrets
 import os
 import platform
 import socket
-import ssl
+import subprocess
 import tempfile
 import itertools
 import threading
 import re
 import time
+import traceback
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -43,6 +44,7 @@ _qt_mock.QThread = _FakeQThread
 _qt_mock.Signal = _FakeSignal
 
 from flask import Flask, g, request, jsonify, Response, send_file
+from werkzeug.exceptions import HTTPException
 import requests as http
 
 from auth.auth_storage import (
@@ -60,6 +62,18 @@ from auth.auth_storage import (
 )
 from auth.api_base import drop_saved_default_api_bases, get_api_base
 from services.library_service import LibraryService
+from services.play_errors import (
+    GameOutput,
+    JavaError,
+    PlayError,
+    PlayFailure,
+    classify_exception,
+    classify_exit,
+    format_details,
+    has_java_failure,
+    is_java_start_failure,
+    redact,
+)
 from window.i18n import set_language, t
 
 set_language()
@@ -159,6 +173,16 @@ def _log_front_response(response):
     print(f"[front] <- {response.status_code} {request.method} {request.path}{took}: {_front_response_summary(response)}", flush=True)
     return response
 
+
+@app.errorhandler(Exception)
+def _handle_error(exc):
+    if isinstance(exc, HTTPException):
+        return jsonify({"ok": False, "error": exc.name, "status": exc.code}), exc.code
+    secrets = _auth_secrets()
+    print(f"[backend] unhandled error in {request.method} {request.path}", flush=True)
+    print(redact("".join(traceback.format_exception(exc)).rstrip(), secrets), file=sys.stderr, flush=True)
+    return jsonify({"ok": False, "error": "internal", "detail": redact(f"{type(exc).__name__}: {exc}", secrets)}), 500
+
 _LOG_MAX = 2000
 _log_lines: deque[str] = deque(maxlen=_LOG_MAX)
 _log_total = 0
@@ -170,10 +194,9 @@ _LOGS_KEEP = 5
 
 def _prune_files(directory: Path, pattern: str, keep: int = _LOGS_KEEP) -> None:
     try:
-        files = [p for p in directory.glob(pattern) if p.is_file()]
+        files = sorted((p for p in directory.glob(pattern) if p.is_file()), key=lambda p: p.stat().st_mtime, reverse=True)
     except OSError:
         return
-    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     for old in files[keep:]:
         try:
             old.unlink()
@@ -1227,7 +1250,7 @@ def _report_environment(report: _LaunchReport, settings: dict) -> None:
         report.add(f"{key}: {settings.get(key)!r}")
 
 
-def _report_java(report: _LaunchReport, java_path: str, mode: str) -> None:
+def _report_java(report: _LaunchReport, java_path: str, mode: str) -> str:
     from auth.java_finder import get_java_major_version, get_java_version
     import shutil as _shutil
     resolved = java_path if os.path.isfile(java_path) else (_shutil.which(java_path) or java_path)
@@ -1236,8 +1259,10 @@ def _report_java(report: _LaunchReport, java_path: str, mode: str) -> None:
     report.add(f"path: {java_path}")
     if resolved != java_path:
         report.add(f"resolved: {resolved}")
-    report.add(f"version: {get_java_version(resolved)}")
+    version = get_java_version(resolved)
+    report.add(f"version: {version}")
     report.add(f"major: {get_java_major_version(resolved)}")
+    return version
 
 
 def _report_build(report: _LaunchReport, build_key: str, game_dir: Path) -> None:
@@ -1325,38 +1350,115 @@ _play_state: dict = {"state": "idle", "status": "", "error": None}
 _play_lock = threading.Lock()
 _play_meter: _SpeedMeter | None = None
 
-_MOD_FAILURE_MARKERS = (
-    "---- Minecraft Crash Report ----",
-    "ModLoadingException",
-    "net.minecraftforge.fml.ModLoadingException",
-    "net.fabricmc.loader.impl.FormattedException",
-    "Mod Loading Errors have occurred",
-    "missing or unsupported mandatory dependencies",
-    "DuplicateModsFoundException",
-)
-
-_NETWORK_ERROR_TYPES = (
-    http.exceptions.ConnectionError,
-    http.exceptions.SSLError,
-    http.exceptions.Timeout,
-    ssl.SSLError,
-    socket.timeout,
-    ConnectionError,
-)
+def _auth_secrets() -> list[str]:
+    try:
+        return [str((load_auth_data() or {}).get("token") or "")]
+    except Exception:
+        return []
 
 
-def _friendly_play_error(exc: Exception) -> str:
-    if isinstance(exc, _NETWORK_ERROR_TYPES):
-        from window.i18n import t
-        return t("play_error_network")
-    return str(exc)
+def _new_log_path(prefix: str) -> Path:
+    path = get_data_dir() / "logs" / f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _save_failed_report(report: _LaunchReport) -> Path | None:
+    try:
+        path = _new_log_path("launch_failed")
+    except OSError as exc:
+        print(f"[launch] report not saved: {exc}", flush=True)
+        return None
+    report.write_to(path)
+    _prune_launcher_logs()
+    print(f"[launch] report saved: {path}", flush=True)
+    return path if path.is_file() else None
+
+
+def _publish_failure(failure: PlayFailure, context: dict[str, str], log_path: Path | None) -> None:
+    header = [f"{t('play_details_log')}: {log_path}"] if log_path else []
+    header.append(f"OS: {platform.platform()} ({platform.machine()})")
+    if context.get("java"):
+        header.append(f"Java: {context['java']}")
+    if context.get("build"):
+        header.append(f"{t('play_details_build')}: {context['build']}")
+    secrets = _auth_secrets()
+    with _play_lock:
+        _play_state.update({
+            "state": "error", "status": "", "pid": None, "_proc": None,
+            "error": _scrub(redact(failure.message, secrets)),
+            "error_kind": failure.kind,
+            "error_details": _scrub(format_details(failure, header, secrets)),
+            "log_path": str(log_path) if log_path else None,
+        })
+
+
+def _ensure_forge(versions_dir: Path, java_path: str, game_dir: Path, status) -> str:
+    from minecraft.mc_client import ensure_forge_version
+    try:
+        return ensure_forge_version(versions_dir, java_path, game_dir, status=status)
+    except OSError as exc:
+        if not is_java_start_failure(exc, java_path):
+            raise
+        raise JavaError(t("play_error_java_start"), str(exc)) from exc
+    except RuntimeError as exc:
+        if isinstance(exc, PlayError):
+            raise
+        if has_java_failure(str(exc)):
+            raise JavaError(t("play_error_java_crash"), str(exc)) from exc
+        raise PlayError(t("play_error_forge"), str(exc), kind="forge") from exc
+
+
+def _spawn_game(argv: list[str], cwd) -> subprocess.Popen:
+    try:
+        return subprocess.Popen(
+            argv, cwd=cwd,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace",
+        )
+    except OSError as exc:
+        if not is_java_start_failure(exc, argv[0]):
+            raise
+        raise JavaError(t("play_error_java_start"), str(exc)) from exc
+
+
+def _close_quietly(handle) -> None:
+    try:
+        handle.close()
+    except OSError:
+        pass
+
+
+def _pipe_game_output(proc: subprocess.Popen, log_path: Path, output: GameOutput) -> None:
+    secrets = _auth_secrets()
+    try:
+        log_file = log_path.open("a", encoding="utf-8")
+    except OSError as exc:
+        print(f"[play] game log unavailable: {exc}", flush=True)
+        log_file = None
+    try:
+        for line in proc.stdout:
+            clean = _scrub(redact(line.rstrip(), secrets))
+            _log_append("[MC] " + clean, persist=False)
+            output.feed(clean)
+            if log_file is None:
+                continue
+            try:
+                log_file.write(clean + "\n")
+            except OSError as exc:
+                print(f"[play] game log write failed: {exc}", flush=True)
+                _close_quietly(log_file)
+                log_file = None
+    finally:
+        if log_file is not None:
+            _close_quietly(log_file)
 
 
 @app.get("/play/state")
 def play_state():
     meter = _play_meter
     with _play_lock:
-        data = {k: v for k, v in _play_state.items() if k != "_proc"}
+        data = {k: v for k, v in _play_state.items() if not k.startswith("_")}
     data["speed"] = meter.speed() if meter else 0
     return jsonify(data)
 
@@ -1367,6 +1469,10 @@ def play_start():
         if _play_state["state"] in ("running", "launched"):
             print(f"[play] start rejected: already {_play_state['state']}", flush=True)
             return jsonify({"ok": False, "error": "already_running"})
+        _play_state.update({
+            "state": "running", "status": t("play_status_preparing"), "progress": 0, "file": None, "pid": None,
+            "error": None, "error_kind": None, "error_details": None, "log_path": None, "_stop_requested": False,
+        })
 
     def run():
         global _play_meter
@@ -1395,12 +1501,11 @@ def play_start():
             with _play_lock:
                 _play_state["progress"] = max(0, min(100, p))
 
-        with _play_lock:
-            _play_state.update({"state": "running", "status": "Подготовка...", "error": None, "progress": 0, "file": None})
         _play_meter = meter
         set_download_listener(on_download_bytes)
 
         report = _LaunchReport()
+        context: dict[str, str] = {}
         try:
             settings = load_settings()
             _report_environment(report, settings)
@@ -1409,30 +1514,27 @@ def play_start():
                 status=set_status, progress=set_progress, allow_build_update=allow_update
             )
             if not build_key:
-                with _play_lock:
-                    _play_state.update({"state": "error", "error": "Нет доступных сборок"})
-                print("[play] no builds available", flush=True)
-                return
+                raise PlayError(t("play_error_build_unavailable"), kind="build")
+            context["build"] = build_key
             print(f"[play] build selected: {build_key}", flush=True)
             report.step("build check")
 
             from services.play_service import prefer_high_performance_gpu, resolve_custom_java, system_openal_jvm_args
             custom_java = str(settings.get("java_path") or "").strip()
             if settings.get("auto_java_version", True) or not custom_java:
-                java_mode = "auto (launcher Oracle JDK 21)" if settings.get("auto_java_version", True) else "auto (no custom path set)"
-                java_path = service.ensure_oracle_java_21(status=set_status, progress=set_progress)
+                java_mode = "auto (launcher GraalVM 21)" if settings.get("auto_java_version", True) else "auto (no custom path set)"
+                java_path = service.ensure_graalvm_21(status=set_status, progress=set_progress)
             else:
                 java_mode = "custom"
                 java_path = resolve_custom_java(custom_java)
             print(f"[play] java_path: {java_path}", flush=True)
-            _report_java(report, java_path, java_mode)
+            context["java"] = f"{java_path} ({_report_java(report, java_path, java_mode)})"
             report.step("java ready")
 
             set_status("Запуск...")
 
-            from minecraft.mc_client import ensure_forge_version, prepare_version
+            from minecraft.mc_client import prepare_version
             from minecraft.mc_launch import build_launch_spec
-            import platform
 
             game_dir = (get_data_dir() / "library" / build_key)
             if not game_dir.is_dir():
@@ -1445,7 +1547,7 @@ def play_start():
             try:
                 shared_game_dir = get_data_dir() / "minecraft"
                 versions_dir = shared_game_dir / "versions"
-                version_id = ensure_forge_version(versions_dir, java_path, shared_game_dir, status=set_status)
+                version_id = _ensure_forge(versions_dir, java_path, shared_game_dir, set_status)
                 report.step("forge ready")
                 prepared = prepare_version(version_id, progress=set_progress, status=set_status)
                 _report_version(report, prepared)
@@ -1480,38 +1582,22 @@ def play_start():
                 report.add(f"effective jvm args: {jvm_args or '-'}")
                 _report_command(report, argv, spec.cwd)
 
-                import subprocess
-                proc = subprocess.Popen(
-                    argv, cwd=spec.cwd,
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, encoding="utf-8", errors="replace",
-                )
-                print(f"[play] process launched, pid={proc.pid}", flush=True)
-                report.add(f"pid: {proc.pid}")
-                report.step("process started")
-                with _play_lock:
-                    _play_state.update({"state": "launched", "status": "Игра запущена", "pid": proc.pid, "_proc": proc, "mod_error": None})
-
-                log_path = get_data_dir() / "logs" / f"minecraft_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-                log_path.parent.mkdir(parents=True, exist_ok=True)
+                log_path = _new_log_path("minecraft")
                 report.add(f"minecraft log: {log_path}")
                 report.write_to(log_path)
                 _prune_launcher_logs()
                 _prune_game_logs(game_dir)
 
-                def _pipe_mc_logs():
-                    with log_path.open("a", encoding="utf-8") as log_file:
-                        for line in proc.stdout:
-                            clean = _scrub(line.rstrip())
-                            _log_append("[MC] " + clean, persist=False)
-                            log_file.write(clean + "\n")
-                            if any(marker in clean for marker in _MOD_FAILURE_MARKERS):
-                                with _play_lock:
-                                    if not _play_state.get("mod_error"):
-                                        _play_state["mod_error"] = clean
-
-                log_thread = threading.Thread(target=_pipe_mc_logs, daemon=True)
+                started_at = time.time()
+                proc = _spawn_game(argv, spec.cwd)
+                output = GameOutput()
+                log_thread = threading.Thread(target=_pipe_game_output, args=(proc, log_path, output), daemon=True)
                 log_thread.start()
+                print(f"[play] process launched, pid={proc.pid}", flush=True)
+                report.add(f"pid: {proc.pid}")
+                report.step("process started")
+                with _play_lock:
+                    _play_state.update({"state": "launched", "status": "Игра запущена", "pid": proc.pid, "_proc": proc})
 
                 proc.wait()
                 log_thread.join(timeout=5)
@@ -1520,41 +1606,56 @@ def play_start():
                 service.cleanup_bundle_files(bundle_state)
 
             with _play_lock:
-                mod_error = _play_state.get("mod_error")
-            if proc.returncode != 0:
-                _log_append(f"[MC] process exited with code {proc.returncode}")
-                error_msg = mod_error or f"Minecraft завершился с кодом {proc.returncode}"
-                print(f"[play] process exited with code {proc.returncode}: {error_msg}", flush=True)
-                with _play_lock:
-                    _play_state.update({
-                        "state": "error", "status": "", "pid": None, "_proc": None,
-                        "error": error_msg, "log_path": str(log_path),
-                    })
-            else:
-                print("[play] process exited normally", flush=True)
+                stop_requested = bool(_play_state.get("_stop_requested"))
+            if proc.returncode == 0 or stop_requested:
+                print("[play] process exited normally" if proc.returncode == 0 else "[play] process stopped by user", flush=True)
                 with _play_lock:
                     _play_state.update({"state": "idle", "status": "", "pid": None, "_proc": None, "log_path": str(log_path)})
+            else:
+                _log_append(f"[MC] process exited with code {proc.returncode}")
+                failure = classify_exit(
+                    proc.returncode,
+                    output,
+                    game_dir=game_dir,
+                    pid=proc.pid,
+                    started_at=started_at,
+                    user_jvm_args=str(settings.get("jvm_args") or ""),
+                )
+                print(f"[play] process exited with code {proc.returncode}: {failure.kind}: {failure.message}", flush=True)
+                _publish_failure(failure, context, log_path)
 
         except Exception as exc:
-            print(f"[play] launch failed: {type(exc).__name__}: {exc}", flush=True)
-            report.add(f"FAILED after {time.monotonic() - report.started:.2f}s: {type(exc).__name__}: {exc}")
-            import traceback
+            secrets = _auth_secrets()
+            reason = redact(f"{type(exc).__name__}: {exc}", secrets)
+            print(f"[play] launch failed: {reason}", flush=True)
+            report.add(f"FAILED after {time.monotonic() - report.started:.2f}s: {reason}")
             for line in traceback.format_exc().splitlines():
-                report.add(line)
-            failed_log = get_data_dir() / "logs" / f"launch_failed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-            failed_log.parent.mkdir(parents=True, exist_ok=True)
-            report.write_to(failed_log)
-            _prune_launcher_logs()
-            print(f"[launch] report saved: {failed_log}", flush=True)
-            with _play_lock:
-                _play_state.update({"state": "error", "error": _scrub(_friendly_play_error(exc))})
+                report.add(redact(line, secrets))
+            failure = classify_exception(exc)
+            report.add(f"error kind: {failure.kind}")
+            _publish_failure(failure, context, _save_failed_report(report))
         finally:
             set_download_listener(None)
             _play_meter = None
             with _play_lock:
                 _play_state["file"] = None
 
-    threading.Thread(target=run, daemon=True).start()
+    def run_guarded():
+        try:
+            run()
+        except Exception as exc:
+            print(f"[play] launch thread crashed: {type(exc).__name__}: {exc}", flush=True)
+            _publish_failure(classify_exception(exc), {}, None)
+        with _play_lock:
+            stuck = _play_state["state"] == "running"
+        if stuck:
+            _publish_failure(PlayFailure("internal", t("play_error_unexpected").format(reason="launch thread stopped")), {}, None)
+
+    try:
+        threading.Thread(target=run_guarded, daemon=True).start()
+    except RuntimeError as exc:
+        _publish_failure(classify_exception(exc), {}, None)
+        raise
     return jsonify({"ok": True})
 
 
@@ -1562,8 +1663,10 @@ def play_start():
 def play_stop():
     with _play_lock:
         proc = _play_state.get("_proc")
-        state = _play_state.get("state")
-    if proc is not None and state == "launched":
+        launched = proc is not None and _play_state.get("state") == "launched"
+        if launched:
+            _play_state["_stop_requested"] = True
+    if launched:
         try:
             proc.terminate()
             print(f"[play] process terminated, pid={proc.pid}", flush=True)

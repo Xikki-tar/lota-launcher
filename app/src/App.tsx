@@ -18,7 +18,7 @@ import { I18nProvider } from "./lib/I18nContext";
 import { checkForUpdate, isInAppUpdateMode, type UpdateCheckResult } from "./lib/update";
 import "./App.css";
 
-type AppState = "loading" | "login" | "main";
+type AppState = "loading" | "failed" | "login" | "main";
 
 async function resolveKey(): Promise<string> {
   const envKey = String(import.meta.env.VITE_BACKEND_KEY ?? "");
@@ -36,6 +36,7 @@ async function resolvePort(): Promise<number> {
 
 export default function App() {
   const [state, setState] = useState<AppState>("loading");
+  const [startupError, setStartupError] = useState("");
   const [backendPort, setBackendPort] = useState<number | null>(null);
   const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
   const [displayVersion, setDisplayVersion] = useState("");
@@ -58,17 +59,21 @@ export default function App() {
   }, [state, backendPort]);
 
   async function initApp() {
+    setState("loading");
     try {
       setBackendKey(await resolveKey());
       const port = await resolvePort();
       console.log("[App] port resolved:", port);
       setBackendPort(port);
-      const auth = await fetch(`http://127.0.0.1:${port}/auth/load`, { headers: backendHeaders() }).then(r => r.json());
+      const res = await fetch(`http://127.0.0.1:${port}/auth/load`, { headers: backendHeaders() });
+      if (!res.ok) throw new Error(`auth/load: HTTP ${res.status}`);
+      const auth = await res.json();
       console.log("[App] auth/load →", JSON.stringify(auth));
       setState(auth?.token ? "main" : "login");
     } catch (e) {
       console.error("[App] initApp failed:", e);
-      setState("login");
+      setStartupError(e instanceof Error ? e.message : String(e));
+      setState("failed");
     }
   }
 
@@ -77,6 +82,23 @@ export default function App() {
       <div className="app">
         <TitleBar version={displayVersion ? `v${displayVersion}` : undefined} />
         <div className="splash"><LoadingDots label="Загрузка" /></div>
+      </div>
+    );
+  }
+
+  if (state === "failed") {
+    return (
+      <div className="app">
+        <TitleBar version={displayVersion ? `v${displayVersion}` : undefined} />
+        <div className="startupError" role="alert">
+          <div className="startupErrorTitle">Не удалось запустить лаунчер</div>
+          <div className="startupErrorText">
+            Фоновый процесс лаунчера не отвечает. Попробуй ещё раз. Если не поможет — переустанови лаунчер
+            и проверь, не блокирует ли его антивирус.
+          </div>
+          {startupError && <pre className="startupErrorDetails">{startupError}</pre>}
+          <button className="startupErrorRetry" onClick={initApp}>Повторить</button>
+        </div>
       </div>
     );
   }

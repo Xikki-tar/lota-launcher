@@ -162,6 +162,69 @@
   color: #fca5a5;
 }
 
+.playErrorRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.playErrorText {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.errorHelpBtn {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid rgba(252, 165, 165, 0.75);
+  border-radius: 50%;
+  background: transparent;
+  color: #fca5a5;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.errorHelpBtn:hover {
+  background: rgba(252, 165, 165, 0.15);
+  border-color: #fca5a5;
+}
+
+.errorHelpBtn:focus-visible,
+.btnErrorAction:focus-visible {
+  outline: 2px solid rgba(245, 180, 73, 0.8);
+  outline-offset: 2px;
+}
+
+.btnErrorAction {
+  width: 100%;
+  margin-top: 8px;
+  padding: 7px 12px;
+  background: rgba(245, 180, 73, 0.18);
+  border: 1px solid rgba(245, 180, 73, 0.5);
+  border-radius: 10px;
+  color: #F5B449;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  min-height: 32px;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.btnErrorAction:hover {
+  background: rgba(245, 180, 73, 0.28);
+  border-color: rgba(245, 180, 73, 0.8);
+}
+
 .nav {
   display: flex;
   flex-direction: column;

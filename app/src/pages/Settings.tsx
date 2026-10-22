@@ -263,7 +263,7 @@ export default function Settings() {
                     checked={form.auto_java_version ?? true}
                     onChange={e => set("auto_java_version", e.target.checked)}
                   />
-                  <span>{t("settings_auto_java", "Автоматически (лаунчер сам скачает Java 21)")}</span>
+                  <span>{t("settings_auto_java", "Автоматически (лаунчер сам скачает GraalVM 21)")}</span>
                 </label>
 
                 <div className={styles.javaList}>

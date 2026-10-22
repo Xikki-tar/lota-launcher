@@ -5,10 +5,12 @@ import { useI18n } from "../lib/I18nContext";
 import { win } from "../lib/tauri";
 import { startProgress, applyProgress, stopTracking, setProgressMeta, useProgress } from "../lib/progressStore";
 import DownloadProgress from "./DownloadProgress";
+import ErrorDetailsDialog from "./ErrorDetailsDialog";
 import { isAppHidden, setAppHidden } from "../lib/appVisibility";
 import styles from "./Layout.module.css";
 
 const PLAY_PROGRESS_ID = "play-start";
+const BACKEND_POLL_FAILURES = 3;
 
 const PAGE_EXIT_MS  = 150;
 const PAGE_ENTER_MS = 220;
@@ -22,6 +24,9 @@ export interface PlayState {
   status?: string;
   progress?: number;
   error?: string | null;
+  error_kind?: string | null;
+  error_details?: string | null;
+  log_path?: string | null;
   pid?: number | null;
   file?: string | null;
   speed?: number;
@@ -30,6 +35,15 @@ export interface PlayState {
 export interface PageContext {
   onBack: () => void;
   onLogout: () => void;
+}
+
+interface ErrorAction {
+  label: string;
+  run: () => void;
+}
+
+function describeError(e: unknown): string {
+  return e instanceof Error ? `${e.name}: ${e.message}` : String(e);
 }
 
 function SkinHead({ port, username }: { port: number | null; username: string }) {
@@ -115,9 +129,13 @@ export default function Layout({ onLogout }: LayoutProps) {
   const [playBusy, setPlayBusy] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [errorDetailsOpen, setErrorDetailsOpen] = useState(false);
+  const [backendError, setBackendError] = useState<string | null>(null);
+  const closeErrorDetails = useCallback(() => setErrorDetailsOpen(false), []);
   const profileRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const prevPlayStateRef = useRef<string>("idle");
+  const pollFailuresRef = useRef(0);
 
   const [pageAnim, setPageAnim] = useState<"enter" | "exit" | "">( "enter");
   const [sidebarAnim, setSidebarAnim] = useState<"enter" | "exit" | "">("enter");
@@ -179,6 +197,8 @@ export default function Layout({ onLogout }: LayoutProps) {
     try {
       const data = await apiGet<PlayState>(port, "/play/state", 0);
       if (!data || typeof data !== "object") return;
+      pollFailuresRef.current = 0;
+      setBackendError(null);
 
       const newState = data.state ?? "idle";
       if (newState === "running") {
@@ -202,12 +222,24 @@ export default function Layout({ onLogout }: LayoutProps) {
 
       setPlayState(data);
       setPlayBusy(false);
-    } catch { /* ignore */ }
+    } catch (e) {
+      pollFailuresRef.current += 1;
+      const prevState = prevPlayStateRef.current;
+      if (pollFailuresRef.current < BACKEND_POLL_FAILURES || (prevState !== "running" && prevState !== "launched")) return;
+      if (prevState === "launched") {
+        setAppHidden(false);
+        win.show().catch(() => {});
+      }
+      prevPlayStateRef.current = "error";
+      stopTracking(PLAY_PROGRESS_ID);
+      setBackendError(describeError(e));
+      setPlayBusy(false);
+    }
   }
 
   async function handlePlay() {
     if (playBusy) return;
-    const ps = playState.state ?? "idle";
+    const ps = shown.state ?? "idle";
     if (ps === "running") return; // preparing — not clickable
     setPlayBusy(true);
     try {
@@ -218,7 +250,9 @@ export default function Layout({ onLogout }: LayoutProps) {
         await apiPost(port, "/play/start");
       }
       await pollPlayState();
-    } catch {
+    } catch (e) {
+      stopTracking(PLAY_PROGRESS_ID);
+      setBackendError(describeError(e));
       setPlayBusy(false);
     }
   }
@@ -254,14 +288,41 @@ export default function Layout({ onLogout }: LayoutProps) {
     { path: "/settings", label: t("btn_settings", "Настройки")  },
   ];
 
-  const ps          = playState.state ?? "idle";
+  function getErrorAction(kind?: string | null): ErrorAction | null {
+    switch (kind) {
+      case "java":
+        return { label: t("play_error_change_java", "Сменить Java"), run: () => navigateAnimated("/settings") };
+      case "memory":
+      case "jvm_args":
+        return { label: t("play_error_open_settings", "Открыть настройки"), run: () => navigateAnimated("/settings") };
+      case "auth":
+        return { label: t("play_error_relogin", "Войти заново"), run: handleLogout };
+      case "build":
+        return { label: t("play_error_open_library", "Открыть библиотеку"), run: () => navigateAnimated("/library") };
+      default:
+        return null;
+    }
+  }
+
+  const shown: PlayState = backendError === null ? playState : {
+    state: "error",
+    error: t("play_error_backend", "Нет связи с фоновым процессом лаунчера. Перезапусти лаунчер."),
+    error_kind: "backend",
+    error_details: backendError,
+  };
+  const ps          = shown.state ?? "idle";
   const isLaunched  = ps === "launched";
   const isPreparing = ps === "running";
   const isError     = ps === "error";
   const progress    = useProgress(PLAY_PROGRESS_ID) ?? 0;
   const statusText  = isError
-    ? (playState.error ?? "Ошибка")
-    : (playState.status ?? "");
+    ? (shown.error ?? "Ошибка")
+    : (shown.status ?? "");
+  const errorAction = isError ? getErrorAction(shown.error_kind) : null;
+
+  useEffect(() => {
+    if (!isError) setErrorDetailsOpen(false);
+  }, [isError]);
 
   const pageCtx: PageContext = {
     onBack:   () => navigateAnimated("/home"),
@@ -308,7 +369,25 @@ export default function Layout({ onLogout }: LayoutProps) {
 
             {(isPreparing || isLaunched || isError) && (
               <div className={`${styles.playStatus} ${isError ? styles.playError : ""}`}>
-                {statusText}
+                {isError ? (
+                  <div className={styles.playErrorRow}>
+                    <span className={styles.playErrorText}>{statusText}</span>
+                    <button
+                      className={styles.errorHelpBtn}
+                      onClick={() => setErrorDetailsOpen(true)}
+                      aria-haspopup="dialog"
+                      title={t("play_error_details", "Подробности ошибки")}
+                      aria-label={t("play_error_details", "Подробности ошибки")}
+                    >
+                      ?
+                    </button>
+                  </div>
+                ) : statusText}
+                {errorAction && (
+                  <button className={styles.btnErrorAction} onClick={errorAction.run}>
+                    {errorAction.label}
+                  </button>
+                )}
                 {isPreparing && progress > 0 && <DownloadProgress id={PLAY_PROGRESS_ID} />}
               </div>
             )}
@@ -355,6 +434,14 @@ export default function Layout({ onLogout }: LayoutProps) {
       )}
     </div>
     {debugMode && <DebugConsole port={port} />}
+    {errorDetailsOpen && isError && (
+      <ErrorDetailsDialog
+        message={statusText}
+        details={shown.error_details ?? ""}
+        logPath={shown.log_path}
+        onClose={closeErrorDetails}
+      />
+    )}
     </div>
   );
 }

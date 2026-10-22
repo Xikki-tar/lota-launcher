@@ -77,6 +77,73 @@ body {
   letter-spacing: 0.5px;
 }
 
+.startupError {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 32px;
+  text-align: center;
+}
+
+.startupErrorTitle {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--error-text);
+}
+
+.startupErrorText {
+  max-width: 460px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.startupErrorDetails {
+  max-width: 600px;
+  max-height: 200px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  background: #0A0806;
+  border: 1px solid #2A1E14;
+  border-radius: 10px;
+  font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: left;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: text;
+}
+
+.startupErrorRetry {
+  min-height: 36px;
+  padding: 8px 20px;
+  background: var(--accent-dim);
+  border: 1px solid rgba(245, 180, 73, 0.5);
+  border-radius: 12px;
+  color: var(--accent);
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.startupErrorRetry:hover {
+  background: rgba(245, 180, 73, 0.28);
+  border-color: rgba(245, 180, 73, 0.8);
+}
+
+.startupErrorRetry:focus-visible {
+  outline: 2px solid rgba(245, 180, 73, 0.8);
+  outline-offset: 2px;
+}
+
 .innerLayout {
   display: flex;
   flex: 1;

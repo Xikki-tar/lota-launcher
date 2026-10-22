@@ -1,41 +1,67 @@
-import { Component, ReactNode } from "react";
+import { Component, ErrorInfo, ReactNode } from "react";
+import { useLocation } from "react-router-dom";
+import { useI18n } from "../lib/I18nContext";
+import styles from "./ErrorBoundary.module.css";
 
-interface State {
-  error: Error | null;
+interface BoundaryProps {
+  children: ReactNode;
+  resetKey: string;
 }
 
-export default class ErrorBoundary extends Component<{ children: ReactNode }, State> {
-  state: State = { error: null };
+interface BoundaryState {
+  error: Error | null;
+  componentStack: string;
+}
 
-  static getDerivedStateFromError(error: Error): State {
+interface FallbackProps {
+  error: Error;
+  componentStack: string;
+  onRetry: () => void;
+}
+
+function ErrorFallback({ error, componentStack, onRetry }: FallbackProps) {
+  const { t } = useI18n();
+  const trace = [error.stack, componentStack.trim()].filter(Boolean).join("\n\n");
+  return (
+    <div className={styles.root} role="alert">
+      <div className={styles.title}>{t("render_error_title", "Что-то пошло не так")}</div>
+      <div className={styles.message}>{error.message || error.name}</div>
+      {trace && <pre className={styles.trace}>{trace}</pre>}
+      <div className={styles.btns}>
+        <button className={styles.btnRetry} onClick={onRetry}>{t("btn_retry", "Попробовать снова")}</button>
+        <button className={styles.btnReload} onClick={() => window.location.reload()}>
+          {t("btn_reload", "Перезагрузить")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+class Boundary extends Component<BoundaryProps, BoundaryState> {
+  state: BoundaryState = { error: null, componentStack: "" };
+
+  static getDerivedStateFromError(error: Error): Partial<BoundaryState> {
     return { error };
   }
 
-  componentDidCatch(error: Error, info: { componentStack: string }) {
-    console.error("[ErrorBoundary]", error.message, info.componentStack);
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("[ErrorBoundary]", error, info.componentStack);
+    this.setState({ componentStack: info.componentStack ?? "" });
   }
 
-  render() {
-    if (this.state.error) {
-      return (
-        <div style={{
-          flex: 1, display: "flex", flexDirection: "column", alignItems: "center",
-          justifyContent: "center", padding: 32, gap: 12, background: "#0B0A08",
-          color: "#F18A80",
-        }}>
-          <div style={{ fontSize: 15, fontWeight: 700 }}>Ошибка рендеринга</div>
-          <div style={{ fontSize: 12, maxWidth: 600, wordBreak: "break-all", textAlign: "center" }}>
-            {this.state.error.message}
-          </div>
-          <pre style={{
-            fontSize: 10, color: "rgba(240,100,100,0.5)", maxWidth: 600,
-            maxHeight: 200, overflow: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all",
-          }}>
-            {this.state.error.stack}
-          </pre>
-        </div>
-      );
-    }
-    return this.props.children;
+  componentDidUpdate(prev: BoundaryProps) {
+    if (this.state.error && prev.resetKey !== this.props.resetKey) this.reset();
   }
+
+  reset = () => this.setState({ error: null, componentStack: "" });
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return <ErrorFallback error={this.state.error} componentStack={this.state.componentStack} onRetry={this.reset} />;
+  }
+}
+
+export default function ErrorBoundary({ children }: { children: ReactNode }) {
+  const location = useLocation();
+  return <Boundary resetKey={location.pathname}>{children}</Boundary>;
 }

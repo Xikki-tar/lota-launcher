@@ -46,7 +46,9 @@ ProgressCallback = Callable[[str, int, int, int], None] | None
 
 
 class BuildSyncError(RuntimeError):
-    pass
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
 
 
 class _RefreshManifest(Exception):
@@ -376,7 +378,7 @@ class BuildSync:
             data = {}
         if response.status_code != 200 or not isinstance(data, dict) or data.get("ok") is not True:
             code = data.get("error") if isinstance(data, dict) else ""
-            raise BuildSyncError(f"manifest: HTTP {response.status_code} {code or ''}".strip())
+            raise BuildSyncError(f"manifest: HTTP {response.status_code} {code or ''}".strip(), response.status_code)
         if not data.get("download_token") or not isinstance(data.get("units"), list):
             raise BuildSyncError("manifest: bad response")
         return data
@@ -597,7 +599,7 @@ class BuildSync:
                 last_error = exc
                 print(f"[sync] {path}: server attempt {attempt + 1}/{UNIT_ATTEMPTS} failed: {type(exc).__name__}: {exc}", flush=True)
                 time.sleep(1.5 * (attempt + 1))
-        raise BuildSyncError(f"{path}: {last_error}")
+        raise BuildSyncError(f"{path}: {last_error}") from last_error
 
     def _stream(self, path: str, unit: dict, url: str, params: dict | None, timeout, *, mirror: bool) -> Path:
         tmp_file = self.install_dir / TMP_DIR / closed_payload_name(f"{path}:{time.monotonic_ns()}")
@@ -620,7 +622,7 @@ class BuildSync:
                         raise _RefreshManifest()
                     if response.status_code >= 500 or response.status_code == 429:
                         raise _Transient(f"HTTP {response.status_code} {code}".strip())
-                    raise BuildSyncError(f"{path}: HTTP {response.status_code} {code}".strip())
+                    raise BuildSyncError(f"{path}: HTTP {response.status_code} {code}".strip(), response.status_code)
                 with tmp_file.open("wb") as out:
                     for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
                         if self.abort.is_set():
