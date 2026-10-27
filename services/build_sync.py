@@ -281,12 +281,14 @@ class BuildSync:
         build_id: int,
         install_dir: Path,
         progress: ProgressCallback = None,
+        skip_closed: bool = False,
     ):
         self.api_base_resolver = api_base_resolver
         self.token = token
         self.build_id = build_id
         self.install_dir = Path(install_dir)
         self.progress = progress
+        self.skip_closed = skip_closed
         self.lock = threading.Lock()
         self.abort = threading.Event()
         self.local = threading.local()
@@ -350,6 +352,9 @@ class BuildSync:
                 + (f", {raw_count - len(units)} invalid entries skipped" if raw_count != len(units) else ""),
                 flush=True,
             )
+            if self.skip_closed and closed:
+                units = {path: unit for path, unit in units.items() if not unit["closed"]}
+                print(f"[sync] build {self.build_id}: skipping {closed} closed units", flush=True)
             self._remove_missing(units)
             pending = self._pending(units)
             self._log_pending(pending, units)

@@ -22,6 +22,7 @@ interface Build {
   _installed: boolean;
   _up_to_date: boolean;
   _build_key: string;
+  _server?: boolean;
 }
 
 interface TaskStatus { progress?: number; state?: string; error?: string | null; file?: string | null; speed?: number; }
@@ -46,7 +47,7 @@ function InstanceOverlay({ mode, instance, builds, port, onClose, onSaved }: Ove
   const [visible, setVisible] = useState(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const sourceBuilds = builds.filter(b => !b.is_instance);
+  const sourceBuilds = builds.filter(b => !b.is_instance && !b._server);
 
   const [name, setName]   = useState(instance?.name ?? "");
   const [desc, setDesc]   = useState(loc(instance?.description, lang));
@@ -295,6 +296,7 @@ export default function Library() {
 
   async function handleSelect(build: Build) {
     setActiveBuild(build);
+    if (build._server) return;
     try {
       await apiPost(port, "/library/select", { build_key: build._build_key });
       setSelectedKey(build._build_key);
@@ -378,6 +380,9 @@ export default function Library() {
                     </span>
                   : <span className={styles.badge}>Не установлена</span>
                 }
+                {activeBuild._server && (
+                  <span className={styles.badge}>{t("library_badge_server", "Серверная")}</span>
+                )}
                 {selectedKey === activeBuild._build_key && (
                   <span className={`${styles.badge} ${styles.badgeSelected}`}>{t("library_btn_selected", "Выбрана")}</span>
                 )}

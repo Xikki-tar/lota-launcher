@@ -33,3 +33,4 @@ auth/build_api.py
 *.swp
 *.swo
 *~
+LIST.md

@@ -1006,9 +1006,15 @@ def library_catalog():
         b["_installed"] = lib.is_build_installed(item)
         b["_up_to_date"] = lib.is_build_up_to_date(item) if b["_installed"] else False
         b["_build_key"] = lib.build_key(item)
+        b["_server"] = lib.is_server_build(item)
         builds.append(b)
     settings = load_settings()
     selected = str(settings.get("selected_build") or "")
+    _item, resolved = lib.resolve_selected(catalog.builds, selected)
+    if resolved != selected:
+        settings["selected_build"] = resolved
+        save_settings(settings)
+        selected = resolved
     print(f"[library] catalog ({'fresh' if fresh else 'cached'}): {len(builds)} builds, selected={selected or '-'}", flush=True)
     for b in builds:
         print(
@@ -1053,7 +1059,7 @@ def library_download():
 
     lib = _lib()
     catalog = lib.load_catalog(token)
-    item = next((b for b in catalog.builds if lib.build_key(b) == build_key), None)
+    item = lib.find_build(catalog.builds, build_key)
     if not item:
         print(f"[library] download rejected: build_key={build_key} not in catalog ({len(catalog.builds)} builds)", flush=True)
         return jsonify({"ok": False, "error": "build_not_found"}), 404
@@ -1069,23 +1075,35 @@ def library_download():
         _active_downloads[build_key] = task_id
     print(f"[library] download start: build_key={build_key} build_id={(source_item or item).get('id')} task={task_id} dir={lib.build_install_dir(item)}", flush=True)
 
+    download_cap = 90 if lib.is_server_build(item) else 99
+
     def run():
         try:
             meter = _SpeedMeter()
             log_progress = _progress_logger(f"[library] download {build_key}:")
+            log_archive = _progress_logger(f"[library] archive {build_key}:")
 
             def on_progress(name: str, delta: int, done: int, total: int):
                 if delta > 0:
                     meter.add(delta)
                 _task_progress(
                     task_id,
-                    min(99, int(done * 99 / total)) if total > 0 else None,
+                    min(download_cap, int(done * download_cap / total)) if total > 0 else None,
                     file=name or None,
                     speed=meter.speed(),
                 )
                 log_progress(done, total, meter.speed())
 
-            lib.sync_build(item, token=token, source_item=source_item, progress=on_progress)
+            def on_archive(name: str, done: int, total: int):
+                _task_progress(
+                    task_id,
+                    download_cap + int(done * (99 - download_cap) / total) if total > 0 else None,
+                    file=name or None,
+                    speed=0,
+                )
+                log_archive(done, total)
+
+            lib.sync_build(item, token=token, source_item=source_item, progress=on_progress, archive_progress=on_archive)
             _task_progress(task_id, 100, speed=0)
             _task_done(task_id)
             print(f"[library] download done: build_key={build_key}", flush=True)
@@ -1109,7 +1127,7 @@ def library_delete():
     auth = load_auth_data() or {}
     token = str(auth.get("token") or "")
     catalog = lib.load_catalog(token)
-    item = next((b for b in catalog.builds if lib.build_key(b) == build_key), None)
+    item = lib.find_build(catalog.builds, build_key)
     if not item:
         print(f"[library] delete rejected: build_key={build_key} not in catalog", flush=True)
         return jsonify({"ok": False, "error": "build_not_found"}), 404
@@ -1167,10 +1185,10 @@ def library_build_folder():
     token = str(auth.get("token") or "")
     lib = _lib()
     catalog = lib.load_catalog(token)
-    item = next((b for b in catalog.builds if lib.build_key(b) == build_key), None)
+    item = lib.find_build(catalog.builds, build_key)
     if not item:
         return jsonify({"ok": False, "error": "not_found"}), 404
-    folder = str(lib.build_install_dir(item))
+    folder = str(lib.build_folder_path(item))
     return jsonify({"ok": True, "path": folder})
 
 
@@ -1536,7 +1554,9 @@ def play_start():
             from minecraft.mc_client import prepare_version
             from minecraft.mc_launch import build_launch_spec
 
-            game_dir = (get_data_dir() / "library" / build_key)
+            lib = _lib()
+            build_item = lib.find_build(lib.load_catalog("", prefer_remote=False).builds, build_key)
+            game_dir = lib.build_install_dir(build_item) if build_item else get_data_dir() / "library" / build_key
             if not game_dir.is_dir():
                 game_dir = get_data_dir() / "minecraft"
 

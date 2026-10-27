@@ -527,12 +527,19 @@ class PlayService:
         print(f"[play] build check: selected={selected or '-'}, catalog has {len(catalog.builds)} builds, logged in={bool(token)}", flush=True)
 
         if selected:
-            selected_item = next(
-                (item for item in catalog.builds if library_service.build_key(item) == selected),
-                None,
-            )
+            selected_item, resolved = library_service.resolve_selected(catalog.builds, selected)
+            if resolved != selected:
+                settings["selected_build"] = resolved
+                save_settings(settings)
+                selected = resolved
+
+        if selected:
             selected_source_item = self._source_item_for_selected(catalog.builds, selected_item)
-            selected_dir = library_service.paths.builds_dir / selected
+            selected_dir = (
+                library_service.build_install_dir(selected_item)
+                if selected_item is not None
+                else library_service.paths.builds_dir / selected
+            )
 
             if selected_item is not None:
                 expected = library_service.expected_build_updated_at(selected_source_item or selected_item)
@@ -559,7 +566,11 @@ class PlayService:
                 return selected
             print(f"[play] selected build {selected} is not in the catalog and not installed, falling back to latest", flush=True)
 
-        builds = [item for item in catalog.builds if isinstance(item, dict) and not item.get("is_instance")]
+        builds = [
+            item
+            for item in catalog.builds
+            if isinstance(item, dict) and not item.get("is_instance") and not library_service.is_server_build(item)
+        ]
         if not builds:
             print("[play] no builds in the catalog", flush=True)
             raise PlayError(t("play_error_build_unavailable"), kind="build")

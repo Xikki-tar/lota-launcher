@@ -16,6 +16,7 @@ const RANK_GRADIENTS: Record<number, [string, string]> = {
   6: ["#0e2f29", "#79d8bb"],
   7: ["#00719a", "#5ce8f4"],
   8: ["#6112f4", "#4c168e"],
+  9: ["#ffb300", "#ff3d00"],
 };
 
 const RANK_TAGS: Record<number, string> = {

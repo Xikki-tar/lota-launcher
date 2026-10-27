@@ -1,16 +1,33 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 import re
 import shutil
 import time
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import requests
 
-from services.build_sync import BuildSync, ProgressCallback, remove_closed_links
+from services.build_sync import (
+    CLOSED_DIR,
+    LEGACY_META_FILE,
+    TMP_DIR,
+    UNITS_STATE_FILE,
+    BuildSync,
+    ProgressCallback,
+    remove_closed_links,
+)
+
+SERVER_TAG = "srv"
+SERVER_ARCHIVE_SKIP = {UNITS_STATE_FILE, UNITS_STATE_FILE + ".tmp", CLOSED_DIR, TMP_DIR, LEGACY_META_FILE}
+SERVER_ARCHIVE_STORED = {".jar", ".zip", ".gz", ".xz", ".7z", ".png", ".jpg", ".jpeg", ".webp", ".ogg", ".mp3", ".mca"}
+
+ArchiveProgressCallback = Callable[[str, int, int], None] | None
 
 
 @dataclass(frozen=True)
@@ -35,6 +52,14 @@ class LibraryPaths:
     @property
     def builds_dir(self) -> Path:
         return self.data_dir / "library"
+
+    @property
+    def server_units_dir(self) -> Path:
+        return self.data_dir / "server_units"
+
+    @property
+    def servers_dir(self) -> Path:
+        return self.data_dir / "servers"
 
     @property
     def instances_path(self) -> Path:
@@ -173,7 +198,45 @@ class LibraryService:
         if item.get("is_instance") and item.get("id"):
             instance_id = re.sub(r"[^A-Za-z0-9._-]+", "_", str(item.get("id")))
             return f"instance-{instance_id}"
+        build_id = str(item.get("id") or "").strip()
+        if not item.get("is_instance") and build_id.isdigit():
+            return f"build-{build_id}"
         return self._legacy_build_key(item)
+
+    def find_build(self, builds: list[dict], key: str) -> dict | None:
+        key = str(key or "").strip()
+        if not key:
+            return None
+        for item in builds:
+            if isinstance(item, dict) and self.build_key(item) == key:
+                return item
+        legacy = [
+            item
+            for item in builds
+            if isinstance(item, dict) and not item.get("is_instance") and self._legacy_build_key(item) == key
+        ]
+        owned = [item for item in legacy if self._client_install_dir(item) == self.paths.builds_dir / key]
+        candidates = owned or legacy
+        return candidates[0] if len(candidates) == 1 else None
+
+    def resolve_selected(self, builds: list[dict], selected: str) -> tuple[dict | None, str]:
+        item = self.find_build(builds, selected)
+        if item is None:
+            return None, selected
+        source = item
+        if item.get("is_instance"):
+            source_id = item.get("_source_build_id")
+            source = next(
+                (b for b in builds if isinstance(b, dict) and not b.get("is_instance") and b.get("id") == source_id),
+                item,
+            )
+        if self.is_server_build(source):
+            print(f"[library] selected build {selected} is a server build, selection cleared", flush=True)
+            return None, ""
+        key = self.build_key(item)
+        if key != selected:
+            print(f"[library] selected build key migrated: {selected} -> {key}", flush=True)
+        return item, key
 
     def _legacy_build_key(self, item: dict) -> str:
         name = str(item.get("name") or "").strip()
@@ -187,19 +250,53 @@ class LibraryService:
         title = re.sub(r"\s+", " ", title).strip()
         return title or "build"
 
+    def is_server_build(self, item: dict) -> bool:
+        tags = item.get("tags")
+        return isinstance(tags, list) and any(str(tag).strip().lower() == SERVER_TAG for tag in tags)
+
+    def server_archive_path(self, item: dict) -> Path:
+        return self.paths.servers_dir / f"{self._legacy_build_key(item)} (id {item.get('id')}).zip"
+
+    def build_folder_path(self, item: dict) -> Path:
+        if self.is_server_build(item):
+            return self.server_archive_path(item)
+        return self.build_install_dir(item)
+
     def build_install_dir(self, item: dict) -> Path:
         self.prepare_dirs()
+        if self.is_server_build(item):
+            return self.paths.server_units_dir / self.build_key(item)
+        return self._client_install_dir(item)
+
+    def _client_install_dir(self, item: dict) -> Path:
         stable_dir = self.paths.builds_dir / self.build_key(item)
-        if item.get("is_instance"):
-            legacy_dir = self.paths.builds_dir / self._legacy_build_key(item)
-            if legacy_dir.exists() and not stable_dir.exists():
-                return legacy_dir
+        if stable_dir.exists():
+            return stable_dir
+        legacy_dir = self.paths.builds_dir / self._legacy_build_key(item)
+        if legacy_dir != stable_dir and legacy_dir.exists() and (item.get("is_instance") or self._owns_legacy_dir(legacy_dir, item)):
+            return legacy_dir
         return stable_dir
+
+    def _owns_legacy_dir(self, path: Path, item: dict) -> bool:
+        for name in (self.BUILD_META_FILE_NAME, UNITS_STATE_FILE):
+            try:
+                data = json.loads((path / name).read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if not isinstance(data, dict):
+                continue
+            if str(data.get("target_build_key") or "").startswith("instance-"):
+                return False
+            if data.get("build_id") is not None:
+                return str(data.get("build_id")) == str(item.get("id"))
+        return False
 
     def build_meta_path(self, item: dict) -> Path:
         return self.build_install_dir(item) / self.BUILD_META_FILE_NAME
 
     def is_build_installed(self, item: dict) -> bool:
+        if self.is_server_build(item):
+            return self.server_archive_path(item).is_file()
         build_dir = self.build_install_dir(item)
         if not build_dir.is_dir():
             return False
@@ -255,23 +352,72 @@ class LibraryService:
         token: str,
         source_item: dict | None = None,
         progress: ProgressCallback = None,
+        archive_progress: ArchiveProgressCallback = None,
     ) -> None:
+        server = self.is_server_build(target_item)
         BuildSync(
             api_base_resolver=self._api_base_resolver,
             token=token,
             build_id=int((source_item or target_item).get("id")),
             install_dir=self.build_install_dir(target_item),
             progress=progress,
+            skip_closed=server,
         ).run()
+        if server:
+            self._archive_server_build(target_item, archive_progress)
         self._write_build_meta(target_item, source_item=source_item, managed_files=[])
 
+    def _archive_server_build(self, item: dict, progress: ArchiveProgressCallback = None) -> Path:
+        source = self.build_install_dir(item)
+        archive = self.server_archive_path(item)
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        files: list[Path] = []
+        for root, dirs, names in os.walk(source):
+            root_path = Path(root)
+            if root_path == source:
+                dirs[:] = [name for name in dirs if name not in SERVER_ARCHIVE_SKIP]
+                names = [name for name in names if name not in SERVER_ARCHIVE_SKIP]
+            for name in names:
+                path = root_path / name
+                if path.is_file() and not path.is_symlink():
+                    files.append(path)
+        files.sort()
+        total = sum(path.stat().st_size for path in files)
+        print(f"[library] server build {self.build_key(item)}: archiving {len(files)} files ({total} bytes) into {archive}", flush=True)
+        started = time.monotonic()
+        tmp = archive.with_name(archive.name + ".tmp")
+        done = 0
+        try:
+            with zipfile.ZipFile(tmp, "w", allowZip64=True, strict_timestamps=False) as zf:
+                for path in files:
+                    compress = zipfile.ZIP_STORED if path.suffix.lower() in SERVER_ARCHIVE_STORED else zipfile.ZIP_DEFLATED
+                    zf.write(path, path.relative_to(source).as_posix(), compress_type=compress)
+                    done += path.stat().st_size
+                    if progress:
+                        progress(path.name, done, total)
+            os.replace(tmp, archive)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+        print(f"[library] server build {self.build_key(item)}: archive ready in {time.monotonic() - started:.1f}s, {archive.stat().st_size} bytes", flush=True)
+        return archive
+
     def delete_build_files(self, item: dict) -> bool:
-        build_dir = self.build_install_dir(item)
-        if not build_dir.exists():
-            return False
-        remove_closed_links(build_dir)
-        shutil.rmtree(build_dir)
-        return True
+        removed = False
+        archive = self.server_archive_path(item)
+        if not item.get("is_instance") and archive.exists():
+            archive.unlink()
+            removed = True
+        dirs = [self._client_install_dir(item)]
+        if not item.get("is_instance"):
+            dirs.append(self.paths.server_units_dir / self.build_key(item))
+        for build_dir in dirs:
+            if not build_dir.exists():
+                continue
+            remove_closed_links(build_dir)
+            shutil.rmtree(build_dir)
+            removed = True
+        return removed
 
     def resolve_image_path(self, base_dir: Path, item: dict) -> Path | None:
         image_path = str(item.get("image") or "").strip()
